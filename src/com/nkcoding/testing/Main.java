@@ -3,6 +3,8 @@ package com.nkcoding.testing;
 import com.nkcoding.communication.SocketCommunication;
 import com.nkcoding.communication.transmissions.StringTransmission;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.Scanner;
 
 public class Main {
@@ -55,6 +57,14 @@ public class Main {
                     break;
                 case "id":
                     System.out.println(communication.getId());
+                    break;
+                case "ip":
+                    try {
+                        InetAddress inetAddress = InetAddress.getLocalHost();
+                        System.out.println("ip: " + inetAddress.getHostAddress());
+                    } catch (UnknownHostException e) {
+                        e.printStackTrace();
+                    }
                     break;
                 case "help":
                     System.out.println("p: print last recent message");
