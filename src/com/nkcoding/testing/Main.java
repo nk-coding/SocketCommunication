@@ -74,7 +74,6 @@ public class Main {
                     break;
                 default:
                     System.out.println("unknown command");
-                    communication.close();
                     break;
             }
 
