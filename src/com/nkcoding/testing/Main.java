@@ -66,11 +66,15 @@ public class Main {
                         e.printStackTrace();
                     }
                     break;
+                case "lst":
+                    System.out.println(communication.getPeers());
+                    break;
                 case "help":
                     System.out.println("p: print last recent message");
                     System.out.println("s: send message to all");
                     System.out.println("st: send message to specific peer");
                     System.out.println("id: get own id");
+                    System.out.println("ip: get your own ip (not completely clear of which subnet)");
                     break;
                 default:
                     System.out.println("unknown command");

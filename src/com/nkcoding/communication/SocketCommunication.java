@@ -72,6 +72,8 @@ public class SocketCommunication extends Communication {
                             Connection connection = new Connection(socket, idCounter);
                             connection.start();
                             idCounter++;
+                            //tell the connection who he is
+                            connection.send(new IntTransmission(Transmission.SET_ID, connection.peerID));
                             for (Connection other : connections.values()) {
                                 if (other != connection && other.remotePortAvailable()) {
                                     connection.send(new PeerInfoTransmission(Transmission.ADD_ID, other.getRemoteIP(), other.remotePort, other.peerID));
@@ -90,6 +92,15 @@ public class SocketCommunication extends Communication {
             serverAcceptingThread.start();
         } catch (IOException e) {
             throw new IllegalArgumentException("could not create ServerSocket", e);
+        }
+    }
+
+    public static int getEphemeralPort() {
+        try {
+            ServerSocket serverSocket = new ServerSocket(0);
+            return serverSocket.getLocalPort();
+        } catch (IOException e) {
+            throw new IllegalStateException("no port available");
         }
     }
 
@@ -214,7 +225,6 @@ public class SocketCommunication extends Communication {
     }
 
     private void setID(int newID) {
-        //TODO real implementation
         this.id = newID;
     }
 
@@ -226,11 +236,12 @@ public class SocketCommunication extends Communication {
      * @param id the id for the new peer
      */
     private void addPeer(String ip, int port, int id) {
-        Connection connection = openConnection(ip, id);
-        if (connection != null) {
-            //tell the new peer who I am
-            connection.send(new IntTransmission(Transmission.SET_PEER_ID, this.id));
-        }
+        Connection connection = openConnection(ip, port, id);
+//        if (connection != null) {
+//            //tell the new peer who I am
+//            System.out.println("I AM " + this.id);
+//            connection.send(new IntTransmission(Transmission.SET_PEER_ID, this.id));
+//        }
     }
 
 
@@ -321,11 +332,15 @@ public class SocketCommunication extends Communication {
                             setPeerID(newID);
                             break;
                         case Transmission.SET_ID:
-                            setID(((IntTransmission) transmission).value);
+                            int nID = ((IntTransmission) transmission).value;
+                            if (SocketCommunication.this.id != nID) {
+                                setID(nID);
+                            }
                             break;
                         case Transmission.GET_ID:
                             //if the id is requested, the peer wants to know my id, so a
                             //SET_PEER_ID is sent back
+                            System.out.println("(requested) I AM " + SocketCommunication.this.id);
                             send(new IntTransmission(Transmission.SET_PEER_ID, SocketCommunication.this.id));
                             break;
                         case Transmission.GET_PEER_ID:
@@ -348,6 +363,7 @@ public class SocketCommunication extends Communication {
                             break;
                         case Transmission.SET_PORT:
                             this.remotePort = ((IntTransmission)transmission).value;
+                            break;
                         default:
                             //redirect to the other transmissions
                             receivedTransmissions.add(transmission);
@@ -364,9 +380,6 @@ public class SocketCommunication extends Communication {
 
         public synchronized void send(Transmission transmission) {
             try {
-                if (outputStream == null) {
-                    System.out.println("why is this null????");
-                }
                 outputStream.writeObject(transmission);
             } catch (IOException e) {
                 System.err.println("could not send data: " + this.peerID);
@@ -382,16 +395,19 @@ public class SocketCommunication extends Communication {
         }
 
         private void setPeerID(int peerID) {
-            if (connections.containsKey(this.peerID)) {
-                System.out.println("HAVE TO REMOVE CONNECTION: NEW ID");
-                connections.remove(this.peerID);
+            if (this.peerID != peerID) {
+                if (connections.containsKey(this.peerID)) {
+                    System.out.println("previous peer id: " + this.peerID);
+                    System.out.println("HAVE TO REMOVE CONNECTION: NEW ID");
+                    connections.remove(this.peerID);
+                }
+                peerSet.remove(this.peerID);
+
+                this.peerID = peerID;
+
+                peerSet.add(peerID);
+                connections.put(peerID, this);
             }
-            peerSet.remove(this.peerID);
-
-            this.peerID = peerID;
-
-            peerSet.add(peerID);
-            connections.put(peerID, this);
         }
 
         @Override
