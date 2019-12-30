@@ -9,6 +9,8 @@ public class Transmission implements Serializable {
     public static final int GET_ID = -3;
     public static final int SET_ID = -4;
     public static final int GET_PEER_ID = -5;
+    public static final int GET_PORT = -6;
+    public static final int SET_PORT = -7;
 
     /**
      * the transmission id

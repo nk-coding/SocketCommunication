@@ -6,6 +6,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Collections;
@@ -45,7 +46,7 @@ public class SocketCommunication extends Communication {
      * create a new communication instance
      *
      * @param isServer should it be the server?
-     * @param port the port to use
+     * @param port     the port to use
      */
     public SocketCommunication(boolean isServer, int port) {
         super(isServer, port);
@@ -68,8 +69,15 @@ public class SocketCommunication extends Communication {
                         //otherwise the id must be known by the peer already
                         //also start the tread
                         if (isServer()) {
-                            new Connection(socket, idCounter).start();
+                            Connection connection = new Connection(socket, idCounter);
+                            connection.start();
                             idCounter++;
+                            for (Connection other : connections.values()) {
+                                if (other != connection && other.remotePortAvailable()) {
+                                    connection.send(new PeerInfoTransmission(Transmission.ADD_ID, other.getRemoteIP(), other.remotePort, other.peerID));
+                                }
+                            }
+
                         } else {
                             new Connection(socket).start();
                         }
@@ -88,6 +96,7 @@ public class SocketCommunication extends Communication {
     /**
      * start the communication with a peer
      * This peer MUST NOT be the server to use this method
+     *
      * @param ip the ip address of the peer
      */
     @Override
@@ -212,6 +221,7 @@ public class SocketCommunication extends Communication {
     /**
      * internal version of openConnection
      * used to ad new peers on other clients
+     *
      * @param ip the new peer ip
      * @param id the id for the new peer
      */
@@ -226,13 +236,14 @@ public class SocketCommunication extends Communication {
 
     /**
      * internally used to open a connection
+     *
      * @param ip the address for remote
      * @return the Connection
      */
     private Connection openConnection(String ip, int port, int id) {
         try {
             Socket peerSocket = new Socket(ip, port);
-            Connection connection = new Connection(peerSocket, id);
+            Connection connection = new Connection(peerSocket, port, id);
             connection.start();
             return connection;
         } catch (IOException e) {
@@ -244,6 +255,7 @@ public class SocketCommunication extends Communication {
 
     /**
      * internally used to open a connection with no known id for the peer
+     *
      * @param ip the address for remote
      * @return the Connection
      */
@@ -260,9 +272,12 @@ public class SocketCommunication extends Communication {
 
         public final ObjectOutputStream outputStream;
 
-        public Connection(Socket socket, int peerID) throws IOException {
+        public int remotePort = -1;
+
+        public Connection(Socket socket, int remotePort, int peerID) throws IOException {
             setPeerID(peerID);
             this.socket = socket;
+            this.remotePort = remotePort;
             outputStream = new ObjectOutputStream(socket.getOutputStream());
             outputStream.flush();
             inputStream = new ObjectInputStream(socket.getInputStream());
@@ -271,10 +286,25 @@ public class SocketCommunication extends Communication {
                 System.out.println("send peerID request");
                 send(new Transmission(Transmission.GET_ID));
             }
+            if (remotePort == -1) {
+                //find out remote port
+                System.out.println("request remote port");
+                send(new Transmission(Transmission.GET_PORT));
+            }
         }
 
-        public Connection(Socket socket) throws IOException{
-            this(socket, -1);
+        /**
+         * wrapper for Connection(socket, -1, peerID)
+         */
+        public Connection(Socket socket, int peerID) throws IOException {
+            this(socket, -1, peerID);
+        }
+
+        /**
+         * wrapper for Connection(socket, -1, -1)
+         */
+        public Connection(Socket socket) throws IOException {
+            this(socket, -1, -1);
         }
 
         @Override
@@ -282,16 +312,16 @@ public class SocketCommunication extends Communication {
             super.run();
             while (true) {
                 try {
-                    Transmission transmission = (Transmission)inputStream.readObject();
+                    Transmission transmission = (Transmission) inputStream.readObject();
                     System.out.println("read new transmission: " + transmission);
                     switch (transmission.getId()) {
                         case Transmission.SET_PEER_ID:
                             //change the id
-                            int newID = ((IntTransmission)transmission).value;
+                            int newID = ((IntTransmission) transmission).value;
                             setPeerID(newID);
                             break;
                         case Transmission.SET_ID:
-                            setID(((IntTransmission)transmission).value);
+                            setID(((IntTransmission) transmission).value);
                             break;
                         case Transmission.GET_ID:
                             //if the id is requested, the peer wants to know my id, so a
@@ -310,9 +340,14 @@ public class SocketCommunication extends Communication {
                             break;
                         case Transmission.ADD_ID:
                             //add a new peer
-                            PeerInfoTransmission pit = (PeerInfoTransmission)transmission;
+                            PeerInfoTransmission pit = (PeerInfoTransmission) transmission;
                             addPeer(pit.ip, pit.port, pit.peerID);
                             break;
+                        case Transmission.GET_PORT:
+                            send(new IntTransmission(Transmission.SET_PORT, SocketCommunication.this.port));
+                            break;
+                        case Transmission.SET_PORT:
+                            this.remotePort = ((IntTransmission)transmission).value;
                         default:
                             //redirect to the other transmissions
                             receivedTransmissions.add(transmission);
@@ -339,7 +374,11 @@ public class SocketCommunication extends Communication {
         }
 
         public String getRemoteIP() {
-            return socket.getRemoteSocketAddress().toString();
+            return ((InetSocketAddress) socket.getRemoteSocketAddress()).getAddress().getHostAddress();
+        }
+
+        public boolean remotePortAvailable() {
+            return remotePort != -1;
         }
 
         private void setPeerID(int peerID) {
@@ -377,7 +416,7 @@ public class SocketCommunication extends Communication {
 
         @Override
         public String toString() {
-            return String.format("%d: ip=%s, peerID=%d", getId(), ip, peerID);
+            return String.format("%d: address=%s:%d, peerID=%d", getId(), ip, port, peerID);
         }
     }
 }
