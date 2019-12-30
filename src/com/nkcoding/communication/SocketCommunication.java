@@ -1,6 +1,8 @@
 package com.nkcoding.communication;
 
 import com.nkcoding.communication.transmissions.IntTransmission;
+import com.nkcoding.communication.transmissions.PeerInfoTransmission;
+import com.nkcoding.communication.transmissions.TransmissionTransmission;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -237,11 +239,6 @@ public class SocketCommunication extends Communication {
      */
     private void addPeer(String ip, int port, int id) {
         Connection connection = openConnection(ip, port, id);
-//        if (connection != null) {
-//            //tell the new peer who I am
-//            System.out.println("I AM " + this.id);
-//            connection.send(new IntTransmission(Transmission.SET_PEER_ID, this.id));
-//        }
     }
 
 
@@ -251,37 +248,37 @@ public class SocketCommunication extends Communication {
      * @param ip the address for remote
      * @return the Connection
      */
-    private Connection openConnection(String ip, int port, int id) {
+    private Connection openConnection(String ip, int port, int peerID) {
         try {
+            System.out.println(ip + ", " + port);
             Socket peerSocket = new Socket(ip, port);
-            Connection connection = new Connection(peerSocket, port, id);
+            Connection connection = new Connection(peerSocket, port, peerID);
             connection.start();
             return connection;
         } catch (IOException e) {
             System.err.println("could not open socket");
             e.printStackTrace();
-            return null;
+            try {
+                //send information to the other peer, that a redirect is necessary
+                connections.get(0).send(new TransmissionTransmission(Transmission.REDIRECT_TRANSMISSION, this.id, peerID,
+                        new IntTransmission(Transmission.ADD_ID_REDIRECTION, this.id)));
+                return new Connection(null, port, peerID);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+                throw new IllegalArgumentException("cannot open port");
+            }
         }
     }
 
-    /**
-     * internally used to open a connection with no known id for the peer
-     *
-     * @param ip the address for remote
-     * @return the Connection
-     */
-    private Connection openConnection(String ip, int port) {
-        return openConnection(ip, port, -1);
-    }
 
     private class Connection extends Thread implements Closeable {
         public final Socket socket;
 
         private int peerID = -1;
 
-        public final ObjectInputStream inputStream;
+        public ObjectInputStream inputStream = null;
 
-        public final ObjectOutputStream outputStream;
+        public ObjectOutputStream outputStream = null;
 
         public int remotePort = -1;
 
@@ -289,9 +286,11 @@ public class SocketCommunication extends Communication {
             setPeerID(peerID);
             this.socket = socket;
             this.remotePort = remotePort;
-            outputStream = new ObjectOutputStream(socket.getOutputStream());
-            outputStream.flush();
-            inputStream = new ObjectInputStream(socket.getInputStream());
+            if (socket != null) {
+                outputStream = new ObjectOutputStream(socket.getOutputStream());
+                outputStream.flush();
+                inputStream = new ObjectInputStream(socket.getInputStream());
+            }
             if (peerID == -1) {
                 //try to get the id
                 System.out.println("send peerID request");
@@ -324,50 +323,7 @@ public class SocketCommunication extends Communication {
             while (true) {
                 try {
                     Transmission transmission = (Transmission) inputStream.readObject();
-                    System.out.println("read new transmission: " + transmission);
-                    switch (transmission.getId()) {
-                        case Transmission.SET_PEER_ID:
-                            //change the id
-                            int newID = ((IntTransmission) transmission).value;
-                            setPeerID(newID);
-                            break;
-                        case Transmission.SET_ID:
-                            int nID = ((IntTransmission) transmission).value;
-                            if (SocketCommunication.this.id != nID) {
-                                setID(nID);
-                            }
-                            break;
-                        case Transmission.GET_ID:
-                            //if the id is requested, the peer wants to know my id, so a
-                            //SET_PEER_ID is sent back
-                            System.out.println("(requested) I AM " + SocketCommunication.this.id);
-                            send(new IntTransmission(Transmission.SET_PEER_ID, SocketCommunication.this.id));
-                            break;
-                        case Transmission.GET_PEER_ID:
-                            //if the peer id is requested, the peer wants to know its own id, so
-                            //a SET_ID is sent back
-                            if (this.peerID == -1) {
-                                System.err.println("tries to get unknown id: " + peerID);
-                            } else {
-                                System.out.println("send peer id: " + peerID);
-                                send(new IntTransmission(Transmission.SET_ID, this.peerID));
-                            }
-                            break;
-                        case Transmission.ADD_ID:
-                            //add a new peer
-                            PeerInfoTransmission pit = (PeerInfoTransmission) transmission;
-                            addPeer(pit.ip, pit.port, pit.peerID);
-                            break;
-                        case Transmission.GET_PORT:
-                            send(new IntTransmission(Transmission.SET_PORT, SocketCommunication.this.port));
-                            break;
-                        case Transmission.SET_PORT:
-                            this.remotePort = ((IntTransmission)transmission).value;
-                            break;
-                        default:
-                            //redirect to the other transmissions
-                            receivedTransmissions.add(transmission);
-                    }
+                    handleTransmission(transmission);
                 } catch (IOException e) {
                     System.err.println("IOException occurred while reading on " + peerID);
                     e.printStackTrace();
@@ -378,11 +334,94 @@ public class SocketCommunication extends Communication {
             }
         }
 
+        void handleTransmission(Transmission transmission) {
+            System.out.println("read new transmission: " + transmission);
+            switch (transmission.getId()) {
+                case Transmission.SET_PEER_ID:
+                    //change the id
+                    int newID = ((IntTransmission) transmission).value;
+                    setPeerID(newID);
+                    break;
+                case Transmission.SET_ID:
+                    int nID = ((IntTransmission) transmission).value;
+                    if (SocketCommunication.this.id != nID) {
+                        setID(nID);
+                    }
+                    break;
+                case Transmission.GET_ID:
+                    //if the id is requested, the peer wants to know my id, so a
+                    //SET_PEER_ID is sent back
+                    System.out.println("(requested) I AM " + SocketCommunication.this.id);
+                    send(new IntTransmission(Transmission.SET_PEER_ID, SocketCommunication.this.id));
+                    break;
+                case Transmission.GET_PEER_ID:
+                    //if the peer id is requested, the peer wants to know its own id, so
+                    //a SET_ID is sent back
+                    if (this.peerID == -1) {
+                        System.err.println("tries to get unknown id: " + peerID);
+                    } else {
+                        System.out.println("send peer id: " + peerID);
+                        send(new IntTransmission(Transmission.SET_ID, this.peerID));
+                    }
+                    break;
+                case Transmission.ADD_ID:
+                    //add a new peer
+                    PeerInfoTransmission pit = (PeerInfoTransmission) transmission;
+                    addPeer(pit.ip, pit.port, pit.peerID);
+                    break;
+                case Transmission.GET_PORT:
+                    send(new IntTransmission(Transmission.SET_PORT, SocketCommunication.this.port));
+                    break;
+                case Transmission.SET_PORT:
+                    this.remotePort = ((IntTransmission)transmission).value;
+                    break;
+                case Transmission.REDIRECT_TRANSMISSION:
+                    TransmissionTransmission transmissionTransmission = (TransmissionTransmission)transmission;
+                    if (transmissionTransmission.to == id) {
+                        //this is the target
+                        Connection connection = connections.get(transmissionTransmission.from);
+                        if (connection != null) {
+                            connection.handleTransmission(transmissionTransmission.transmission);
+                        } else {
+                            System.out.println("cannot handle transmission");
+                        }
+                    } else {
+                        Connection connection = connections.get(transmissionTransmission.to);
+                        if (connection != null) {
+                            connection.send(transmission);
+                        } else {
+                            System.out.println("cannot redirect transmission");
+                        }
+                    }
+                    break;
+                case Transmission.ADD_ID_REDIRECTION:
+                    try {
+                        new Connection(null, ((IntTransmission)transmission).value).start();
+                    } catch (IOException e) {
+                        System.err.println("IOException while opening redirect connection");
+                        e.printStackTrace();
+                    }
+                    break;
+                default:
+                    //redirect to the other transmissions
+                    receivedTransmissions.add(transmission);
+            }
+        }
+
         public synchronized void send(Transmission transmission) {
-            try {
-                outputStream.writeObject(transmission);
-            } catch (IOException e) {
-                System.err.println("could not send data: " + this.peerID);
+            if (socket != null) {
+                //there is a direct connection available
+                try {
+                    outputStream.writeObject(transmission);
+                } catch (IOException e) {
+                    System.err.println("could not send data: " + this.peerID);
+                }
+            } else {
+                if (id == -1 || peerID == -1) {
+                    System.err.printf("ERROR: cannot send via server, id:%d, peerOD:%d%n", id, peerID);
+                }
+                //no direct connection, redirect over server
+                connections.get(0).send(new TransmissionTransmission(Transmission.REDIRECT_TRANSMISSION, id, peerID, transmission));
             }
         }
 
@@ -418,21 +457,4 @@ public class SocketCommunication extends Communication {
         }
     }
 
-    private static class PeerInfoTransmission extends Transmission {
-        public String ip;
-        public int peerID;
-        public int port;
-
-        public PeerInfoTransmission(int id, String ip, int port, int peerID) {
-            super(id);
-            this.ip = ip;
-            this.peerID = peerID;
-            this.port = port;
-        }
-
-        @Override
-        public String toString() {
-            return String.format("%d: address=%s:%d, peerID=%d", getId(), ip, port, peerID);
-        }
-    }
 }

@@ -11,6 +11,8 @@ public class Transmission implements Serializable {
     public static final int GET_PEER_ID = -5;
     public static final int GET_PORT = -6;
     public static final int SET_PORT = -7;
+    public static final int REDIRECT_TRANSMISSION = -8;
+    public static final int ADD_ID_REDIRECTION = -9;
 
     /**
      * the transmission id
