@@ -250,6 +250,10 @@ public class SocketCommunication extends Communication {
      */
     private Connection openConnection(String ip, int port, int peerID) {
         try {
+            if (port != 8001) {
+                System.err.println("force server client connection");
+                throw new IOException();
+            }
             System.out.println(ip + ", " + port);
             Socket peerSocket = new Socket(ip, port);
             Connection connection = new Connection(peerSocket, port, peerID);
@@ -260,7 +264,7 @@ public class SocketCommunication extends Communication {
             e.printStackTrace();
             try {
                 //send information to the other peer, that a redirect is necessary
-                connections.get(0).send(new TransmissionTransmission(Transmission.REDIRECT_TRANSMISSION, this.id, peerID,
+                connections.get(0).send(new TransmissionTransmission(Transmission.REDIRECT_TRANSMISSION, 0, peerID,
                         new IntTransmission(Transmission.ADD_ID_REDIRECTION, this.id)));
                 return new Connection(null, port, peerID);
             } catch (IOException ex) {
@@ -390,13 +394,13 @@ public class SocketCommunication extends Communication {
                         if (connection != null) {
                             connection.send(transmission);
                         } else {
-                            System.out.println("cannot redirect transmission");
+                            System.out.println("cannot redirect transmission: " + transmissionTransmission.to);
                         }
                     }
                     break;
                 case Transmission.ADD_ID_REDIRECTION:
                     try {
-                        new Connection(null, ((IntTransmission)transmission).value).start();
+                        new Connection(null, ((IntTransmission)transmission).value);
                     } catch (IOException e) {
                         System.err.println("IOException while opening redirect connection");
                         e.printStackTrace();
