@@ -1,7 +1,10 @@
 package com.nkcoding.testing;
 
 import com.nkcoding.communication.SocketCommunication;
+import com.nkcoding.communication.Transmission;
+import com.nkcoding.communication.transmissions.IntTransmission;
 import com.nkcoding.communication.transmissions.StringTransmission;
+import com.nkcoding.communication.transmissions.TransmissionTransmission;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -69,12 +72,23 @@ public class Main {
                 case "lst":
                     System.out.println(communication.getPeers());
                     break;
+                case "shutdown":
+                    System.out.println("to:");
+                    int to = in.nextInt();
+                    in.nextLine();
+                    communication.sendTo(0, new TransmissionTransmission(Transmission.REDIRECT_TRANSMISSION,
+                            0, communication.getId(),
+                            new IntTransmission(Transmission.REMOVE_CONNECTION, to)));
+                    break;
                 case "help":
                     System.out.println("p: print last recent message");
                     System.out.println("s: send message to all");
                     System.out.println("st: send message to specific peer");
                     System.out.println("id: get own id");
                     System.out.println("ip: get your own ip (not completely clear of which subnet)");
+                    System.out.println("lst: list all available connections");
+                    System.out.println("shutdown: close specific connection (debug reasons only)");
+                    System.out.println("help: list all commands");
                     break;
                 default:
                     System.out.println("unknown command");

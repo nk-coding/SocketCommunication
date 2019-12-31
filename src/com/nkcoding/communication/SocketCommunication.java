@@ -218,11 +218,7 @@ public class SocketCommunication extends Communication {
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
-            try {
-                connection.close();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+            connection.close();
         }
     }
 
@@ -250,12 +246,10 @@ public class SocketCommunication extends Communication {
      */
     private Connection openConnection(String ip, int port, int peerID) {
         try {
-            if (port != 8001) {
-                System.err.println("force server client connection");
-                throw new IOException();
-            }
             System.out.println(ip + ", " + port);
-            Socket peerSocket = new Socket(ip, port);
+            //Socket peerSocket = new Socket(ip, port);
+            Socket peerSocket = new Socket();
+            peerSocket.connect(new InetSocketAddress(ip, port), 700);
             Connection connection = new Connection(peerSocket, port, peerID);
             connection.start();
             return connection;
@@ -274,9 +268,24 @@ public class SocketCommunication extends Communication {
         }
     }
 
+    /**
+     * used to shutdown a specific connection
+     * @param idToShutdown
+     */
+    private void shutdownConnection(int idToShutdown) {
+        Connection toShutdown = connections.remove(idToShutdown);
+        if (toShutdown != null) {
+            System.out.println("shutdown " + idToShutdown);
+            toShutdown.shutdown = true;
+            toShutdown.interrupt();
+            toShutdown.close();
+        }
+        peerSet.remove(idToShutdown);
+    }
+
 
     private class Connection extends Thread implements Closeable {
-        public final Socket socket;
+        public Socket socket;
 
         private int peerID = -1;
 
@@ -285,6 +294,8 @@ public class SocketCommunication extends Communication {
         public ObjectOutputStream outputStream = null;
 
         public int remotePort = -1;
+
+        public volatile boolean shutdown = false;
 
         public Connection(Socket socket, int remotePort, int peerID) throws IOException {
             setPeerID(peerID);
@@ -331,9 +342,29 @@ public class SocketCommunication extends Communication {
                 } catch (IOException e) {
                     System.err.println("IOException occurred while reading on " + peerID);
                     e.printStackTrace();
+                    break;
                 } catch (Exception e) {
                     System.err.println("probably different project versions " + peerID);
                     e.printStackTrace();
+                    break;
+                }
+            }
+            if (!shutdown) {
+                if (isServer()) {
+                    //shutdown and send to all clients
+                    System.out.println("shutdown from server");
+                    shutdownConnection(peerID);
+                    sendToAll(new IntTransmission(Transmission.REMOVE_CONNECTION, peerID));
+                } else {
+                    //this is not a planned shutdown, so go to server mode and request remove request
+                    System.out.println("connection from " + id + " to " + peerID + " failed, go to server mode");
+                    try {
+                        socket.close();
+                    } catch (Exception e) {
+                        System.out.println("exception while closing socket");
+                    }
+                    this.socket = null;
+                    sendTo(0, new IntTransmission(Transmission.REMOVE_CONNECTION_REQUEST, peerID));
                 }
             }
         }
@@ -406,11 +437,29 @@ public class SocketCommunication extends Communication {
                         e.printStackTrace();
                     }
                     break;
+                case Transmission.REMOVE_CONNECTION:
+                    int idToShutdown = ((IntTransmission)transmission).value;
+                    shutdownConnection(idToShutdown);
+                    break;
+                case Transmission.REMOVE_CONNECTION_REQUEST:
+                    if (isServer()) {
+                        //TODO maybe improve this with a ping and a timeout, but this should be good enough for this
+                        int removeRequest = ((IntTransmission)transmission).value;
+                        if (!connections.containsKey(removeRequest)) {
+                            sendToAll(new IntTransmission(Transmission.REMOVE_CONNECTION, removeRequest));
+                        } else {
+                            System.out.println("not necessary to remove connection to " + removeRequest);
+                        }
+                    } else {
+                        System.err.println("this can only be done on a server");
+                    }
+                    break;
                 default:
                     //redirect to the other transmissions
                     receivedTransmissions.add(transmission);
             }
         }
+
 
         public synchronized void send(Transmission transmission) {
             if (socket != null) {
@@ -454,10 +503,15 @@ public class SocketCommunication extends Communication {
         }
 
         @Override
-        public void close() throws IOException {
-            inputStream.close();
-            outputStream.close();
-            socket.close();
+        public void close() {
+            try {
+                inputStream.close();
+                outputStream.close();
+                socket.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
         }
     }
 
