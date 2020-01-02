@@ -80,6 +80,9 @@ public class Main {
                             0, communication.getId(),
                             new IntTransmission(Transmission.REMOVE_CONNECTION, to)));
                     break;
+                case "lock":
+                    System.out.println(communication.stateCounter.get());
+                    break;
                 case "help":
                     System.out.println("p: print last recent message");
                     System.out.println("s: send message to all");
@@ -88,6 +91,7 @@ public class Main {
                     System.out.println("ip: get your own ip (not completely clear of which subnet)");
                     System.out.println("lst: list all available connections");
                     System.out.println("shutdown: close specific connection (debug reasons only)");
+                    System.out.println("lock: find out if it is locked");
                     System.out.println("help: list all commands");
                     break;
                 default:

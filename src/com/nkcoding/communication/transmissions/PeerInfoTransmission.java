@@ -2,20 +2,37 @@ package com.nkcoding.communication.transmissions;
 
 import com.nkcoding.communication.Transmission;
 
-public class PeerInfoTransmission extends Transmission {
-    public String ip;
-    public int peerID;
-    public int port;
+import java.io.Serializable;
+import java.util.Arrays;
 
-    public PeerInfoTransmission(int id, String ip, int port, int peerID) {
+public class PeerInfoTransmission extends Transmission {
+    public PeerInfo[] peerInfos;
+
+    public PeerInfoTransmission(int id, PeerInfo[] peerInfos) {
         super(id);
-        this.ip = ip;
-        this.peerID = peerID;
-        this.port = port;
+        this.peerInfos = peerInfos;
     }
 
     @Override
     public String toString() {
-        return String.format("%d: address=%s:%d, peerID=%d", getId(), ip, port, peerID);
+        return getId() + ": " + Arrays.toString(peerInfos);
+    }
+
+    public static class PeerInfo implements Serializable {
+        public String ip;
+        public int peerID;
+        public int port;
+
+        public PeerInfo(String ip, int port, int peerID) {
+            this.ip = ip;
+            this.peerID = peerID;
+            this.port = port;
+        }
+
+
+        @Override
+        public String toString() {
+            return String.format("address=%s:%d, peerID=%d", ip, port, peerID);
+        }
     }
 }

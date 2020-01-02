@@ -11,12 +11,15 @@ import java.io.ObjectOutputStream;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class SocketCommunication extends Communication {
 
@@ -56,7 +59,7 @@ public class SocketCommunication extends Communication {
         connections = new ConcurrentHashMap<>();
         peerSet = new CopyOnWriteArraySet<>();
         if (isServer) {
-            this.id = 0;
+            setID(0);
         }
         try {
             //create the ServerSocket with  a thread for it and start it
@@ -76,12 +79,13 @@ public class SocketCommunication extends Communication {
                             idCounter++;
                             //tell the connection who he is
                             connection.send(new IntTransmission(Transmission.SET_ID, connection.peerID));
+                            List<PeerInfoTransmission.PeerInfo> peerInfos = new ArrayList<>();
                             for (Connection other : connections.values()) {
                                 if (other != connection && other.remotePortAvailable()) {
-                                    connection.send(new PeerInfoTransmission(Transmission.ADD_ID, other.getRemoteIP(), other.remotePort, other.peerID));
+                                    peerInfos.add(new PeerInfoTransmission.PeerInfo(other.getRemoteIP(), other.remotePort, other.peerID));
                                 }
                             }
-
+                            connection.send(new PeerInfoTransmission(Transmission.ADD_ID, peerInfos.toArray(PeerInfoTransmission.PeerInfo[]::new)));
                         } else {
                             new Connection(socket).start();
                         }
@@ -247,7 +251,6 @@ public class SocketCommunication extends Communication {
     private Connection openConnection(String ip, int port, int peerID) {
         try {
             System.out.println(ip + ", " + port);
-            //Socket peerSocket = new Socket(ip, port);
             Socket peerSocket = new Socket();
             peerSocket.connect(new InetSocketAddress(ip, port), 700);
             Connection connection = new Connection(peerSocket, port, peerID);
@@ -402,7 +405,9 @@ public class SocketCommunication extends Communication {
                 case Transmission.ADD_ID:
                     //add a new peer
                     PeerInfoTransmission pit = (PeerInfoTransmission) transmission;
-                    addPeer(pit.ip, pit.port, pit.peerID);
+                    for (PeerInfoTransmission.PeerInfo peerInfo : pit.peerInfos) {
+                        addPeer(peerInfo.ip, peerInfo.port, peerInfo.peerID);
+                    }
                     break;
                 case Transmission.GET_PORT:
                     send(new IntTransmission(Transmission.SET_PORT, SocketCommunication.this.port));
