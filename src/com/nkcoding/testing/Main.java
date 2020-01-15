@@ -75,12 +75,27 @@ public class Main {
                     System.out.println(Arrays.toString(bytes));
                     System.out.printf("%#x%n", DatagramSocketCommunication.readInt(bytes, 0));
                     break;
+                case "shutdown":
+                    System.out.println("to:");
+                    int to = in.nextInt();
+                    in.nextLine();
+                    communication.sendTo(0, new TransmissionTransmission(Transmission.REDIRECT_TRANSMISSION,
+                            0, communication.getId(),
+                            new IntTransmission(Transmission.REMOVE_CONNECTION, to)));
+                    break;
+                case "lock":
+                    System.out.println(communication.stateCounter.get());
+                    break;
                 case "help":
                     System.out.println("p: print last recent message");
                     System.out.println("s: send message to all");
                     System.out.println("st: send message to specific peer");
                     System.out.println("id: get own id");
                     System.out.println("ip: get your own ip (not completely clear of which subnet)");
+                    System.out.println("lst: list all available connections");
+                    System.out.println("shutdown: close specific connection (debug reasons only)");
+                    System.out.println("lock: find out if it is locked");
+                    System.out.println("help: list all commands");
                     break;
                 default:
                     System.out.println("unknown command");
