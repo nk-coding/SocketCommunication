@@ -152,7 +152,7 @@ public class DatagramSocketCommunication extends Communication {
          */
         private int ack;
         /**
-         * represents the status of further messages, EXCLUDING the expected one from ack
+         * represents the status of further messages, INCLUDING the expected one from ack
          */
         private int ackField = 0xFFFFFFFF;
 
@@ -223,6 +223,10 @@ public class DatagramSocketCommunication extends Communication {
         private void handleReliableMessage(byte[] msg) {
             //get the message sequence
             int msgSequence = readInt(msg, 9);
+            if (msgSequence < ack) {
+                System.out.println("received delayed message, discard: " + msgSequence + ", " + ack);
+                return;
+            }
             //ensure the capacity
             if (msgSequence - messageBufferOffset > reliableMessageBuffer.size()) {
                 for (int i = 0; i < reliableMessageBuffer.size() - msgSequence + messageBufferOffset; i++) {
@@ -231,18 +235,22 @@ public class DatagramSocketCommunication extends Communication {
             }
             //add it to the buffer
             reliableMessageBuffer.set(msgSequence - messageBufferOffset, msg);
+            //update partialMessageLength if necessary
+            if (msgSequence == ack) {
+                partialMessageLength = (readFlag(msg, IS_PARTIAL)) ? readShort(msg, 7) : 1;
+            }
             //check if it has to be handled by updateAcknowledged
-            if (msgSequence == ack || partialMessageLength > 1 || (msgSequence - messageBufferOffset) < 32) {
-                updateAcknowledged();
+            if ((msgSequence - messageBufferOffset) < 32) {
+                ackField |= (1 << (msgSequence - messageBufferOffset));
+                tryReceiveReliableMessage();
             }
         }
 
         /**
-         * handles update to the acknowledged, also removes completely received messages
-         * has to be called if
-         * a)
+         * tries to receive a reliable message from the reliableMessagesBuffer, and updates the ack accordingly
+         * should be called after an update of one of the first 32 elements in the reliableMessagesBuffer
          */
-        private void updateAcknowledged() {
+        private void tryReceiveReliableMessage() {
 
         }
 
