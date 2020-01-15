@@ -4,7 +4,9 @@ import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.ListIterator;
 import java.util.Set;
 import java.util.concurrent.*;
 
@@ -231,7 +233,7 @@ public class DatagramSocketCommunication extends Communication {
             if (readFlag(msg, IS_RELIABLE)) {
                 handleReliableMessage(msg);
             } else {
-                handleReceivedMessage(msg);
+                handleReceivedMessage(msg, HEADER_SIZE);
             }
         }
 
@@ -266,16 +268,67 @@ public class DatagramSocketCommunication extends Communication {
          * should be called after an update of one of the first 32 elements in the reliableMessagesBuffer
          */
         private void tryReceiveReliableMessage() {
-
+            boolean receivedAll = false;
+            while (!receivedAll) {
+                Iterator<byte[]> iter = reliableMessageBuffer.iterator();
+                int amount = 0;
+                int totalSize = 0;
+                while (amount < messageBufferOffset && iter.hasNext()) {
+                    byte[] bytes = iter.next();
+                    if (bytes == null) {
+                        receivedAll = true;
+                        break;
+                    }
+                    amount++;
+                    totalSize += bytes.length;
+                }
+                //update ack and ackfield
+                if (amount > 0) {
+                    ack >>>= amount;
+                    int index = 32 - amount;
+                    if (index < reliableMessageBuffer.size()) {
+                        ListIterator<byte[]> listIterator = reliableMessageBuffer.listIterator(32);
+                        while (index < 32 && listIterator.hasNext()) {
+                            byte[] bytes = listIterator.next();
+                            if (index >= 0 && bytes != null) {
+                                ackField |= (1 << index);
+                            }
+                            index++;
+                        }
+                    }
+                }
+                if (!receivedAll) {
+                    //handle the message based on whether it is partial or not
+                    if (amount == 1) {
+                        byte[] msg = reliableMessageBuffer.removeFirst();
+                        handleReceivedMessage(msg, HEADER_SIZE);
+                        reliableMessageBuffer.addLast(null);
+                    } else {
+                        byte[] msg = new byte[totalSize - amount * HEADER_SIZE];
+                        int newPos = 0;
+                        for (int i = 0; i < amount; i++) {
+                            byte[] part = reliableMessageBuffer.removeFirst();
+                            int length = part.length - HEADER_SIZE;
+                            System.arraycopy(part, HEADER_SIZE, msg, newPos, length);
+                            newPos += length;
+                            reliableMessageBuffer.addLast(null);
+                        }
+                        handleReceivedMessage(msg, 0);
+                    }
+                    //update offset
+                    messageBufferOffset += amount;
+                }
+            }
         }
 
         /**
          * handles a complete received message, and adds it to receivedTransmissions or handles it internal
          */
-        private void handleReceivedMessage(byte[] msg) {
+        private void handleReceivedMessage(byte[] msg, int offset) {
             ByteArrayInputStream inputStream = new ByteArrayInputStream(msg);
-            long skipped = inputStream.skip(HEADER_SIZE);
-            if (skipped != HEADER_SIZE) System.out.println("error: could not skip enough: " + skipped);
+            long skipped = inputStream.skip(offset);
+            inputStream.mark(0);
+            if (skipped != offset) System.out.println("error: could not skip enough: " + skipped);
             DataInputStream dataInputStream = new DataInputStream(inputStream);
             if (readFlag(msg, IS_SYSTEM)) {
                 handleSystemMessage(dataInputStream);
