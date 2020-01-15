@@ -1,10 +1,10 @@
 package com.nkcoding.testing;
 
-import com.nkcoding.communication.SocketCommunication;
-import com.nkcoding.communication.transmissions.StringTransmission;
+import com.nkcoding.communication.DatagramSocketCommunication;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.Arrays;
 import java.util.Scanner;
 
 public class Main {
@@ -30,7 +30,7 @@ public class Main {
         System.out.println("enter port");
         int port = in.nextInt();
 
-        SocketCommunication communication = new SocketCommunication(startAsServer, port);
+        DatagramSocketCommunication communication = new DatagramSocketCommunication(startAsServer, port);
         if (!startAsServer) {
             System.out.println("connect to server...");
             communication.openCommunication(remoteIP, remotePort);
@@ -46,14 +46,14 @@ public class Main {
                     break;
                 case "s":
                     System.out.println("enter message");
-                    communication.sendToAll(new StringTransmission(1, in.nextLine()));
+                    //communication.sendToAll(new StringTransmission(1, in.nextLine()));
                     break;
                 case "st":
                     System.out.println("enter peer id");
                     int id = in.nextInt();
                     in.nextLine();
                     System.out.println("enter message");
-                    communication.sendTo(id, new StringTransmission(1, in.nextLine()));
+                    //communication.sendTo(id, new StringTransmission(1, in.nextLine()));
                     break;
                 case "id":
                     System.out.println(communication.getId());
@@ -68,6 +68,12 @@ public class Main {
                     break;
                 case "lst":
                     System.out.println(communication.getPeers());
+                    break;
+                case "test":
+                    byte[] bytes = new byte[4];
+                    DatagramSocketCommunication.writeInt(bytes, 0, 0x1234FAB1);
+                    System.out.println(Arrays.toString(bytes));
+                    System.out.printf("%#x%n", DatagramSocketCommunication.readInt(bytes, 0));
                     break;
                 case "help":
                     System.out.println("p: print last recent message");
