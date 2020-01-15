@@ -259,7 +259,8 @@ public class DatagramSocketCommunication extends Communication {
          */
         private void handleReceivedMessage(byte[] msg) {
             ByteArrayInputStream inputStream = new ByteArrayInputStream(msg);
-            inputStream.skip(HEADER_SIZE);
+            long skipped = inputStream.skip(HEADER_SIZE);
+            if (skipped != HEADER_SIZE) System.out.println("error: could not skip enough: " + skipped);
             DataInputStream dataInputStream = new DataInputStream(inputStream);
             if (readFlag(msg, IS_SYSTEM)) {
                 handleSystemMessage(dataInputStream);
