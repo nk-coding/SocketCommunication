@@ -284,7 +284,8 @@ public class DatagramSocketCommunication extends Communication {
                 }
                 //update ack and ackfield
                 if (amount > 0) {
-                    ack >>>= amount;
+                    ack += amount;
+                    ackField >>>= amount;
                     int index = 32 - amount;
                     if (index < reliableMessageBuffer.size()) {
                         ListIterator<byte[]> listIterator = reliableMessageBuffer.listIterator(32);
@@ -351,6 +352,7 @@ public class DatagramSocketCommunication extends Communication {
             while (!shutdown) {
                 try {
                     byte[] msg = receiveQueue.poll(RECEIVE_TIMEOUT, TimeUnit.MILLISECONDS);
+                    receiveInternal(msg);
                 } catch (InterruptedException e) {
                     System.out.println("did not receive anything: " + remoteID);
                 }
