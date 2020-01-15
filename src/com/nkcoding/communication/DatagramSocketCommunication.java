@@ -131,7 +131,7 @@ public class DatagramSocketCommunication extends Communication {
     }
 
     static boolean readFlag(byte[] msg, byte flag) {
-        return (msg[2] & flag) != 0;
+        return ((msg[2] & flag) & 0xFF) != 0;
     }
 
     public short getClientID() {
@@ -154,9 +154,19 @@ public class DatagramSocketCommunication extends Communication {
         /**
          * represents the status of further messages, INCLUDING the expected one from ack
          */
-        private int ackField = 0xFFFFFFFF;
+        private int ackField = 0;
 
-        private int sequence;
+        /**
+         * the sequence number for the next send operation
+         */
+        private int sequence = 0;
+
+        /**
+         * the sequence Number that LAST was acknowledged
+         */
+        private int sequenceAcknowledged = -1;
+
+        private int sequenceAcknowledgedField = 0xFFFFFFFF;
 
         private volatile boolean shutdown = false;
 
@@ -213,8 +223,13 @@ public class DatagramSocketCommunication extends Communication {
          * handles a raw received message byte array
          */
         private void receiveInternal(byte[] msg) {
+            int acknowledged = readInt(msg, 13);
+            if (acknowledged > sequenceAcknowledged) {
+                sequenceAcknowledgedField >>>= (acknowledged - sequenceAcknowledged);
+                sequenceAcknowledgedField |= readInt(msg, 17);
+            }
             if (readFlag(msg, IS_RELIABLE)) {
-                //TODO
+                handleReliableMessage(msg);
             } else {
                 handleReceivedMessage(msg);
             }
