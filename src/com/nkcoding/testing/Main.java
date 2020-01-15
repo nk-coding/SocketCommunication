@@ -75,17 +75,17 @@ public class Main {
                     System.out.println(Arrays.toString(bytes));
                     System.out.printf("%#x%n", DatagramSocketCommunication.readInt(bytes, 0));
                     break;
-                case "shutdown":
-                    System.out.println("to:");
-                    int to = in.nextInt();
-                    in.nextLine();
-                    communication.sendTo(0, new TransmissionTransmission(Transmission.REDIRECT_TRANSMISSION,
-                            0, communication.getId(),
-                            new IntTransmission(Transmission.REMOVE_CONNECTION, to)));
-                    break;
-                case "lock":
-                    System.out.println(communication.stateCounter.get());
-                    break;
+//                case "shutdown":
+//                    System.out.println("to:");
+//                    int to = in.nextInt();
+//                    in.nextLine();
+//                    communication.sendTo(0, new TransmissionTransmission(Transmission.REDIRECT_TRANSMISSION,
+//                            0, communication.getId(),
+//                            new IntTransmission(Transmission.REMOVE_CONNECTION, to)));
+//                    break;
+//                case "lock":
+//                    System.out.println(communication.stateCounter.get());
+//                    break;
                 case "help":
                     System.out.println("p: print last recent message");
                     System.out.println("s: send message to all");
