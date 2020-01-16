@@ -1,6 +1,7 @@
 package com.nkcoding.communication;
 
 import java.io.*;
+import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -12,8 +13,6 @@ public class DatagramSocketCommunication extends Communication {
     static final byte IS_SYSTEM = 0x01;
     static final byte IS_RELIABLE = 0x02;
     static final byte IS_PARTIAL = 0x04;
-//    static final byte IS_PARTIAL_START = 0x08;
-//    static final byte IS_PARTIAL_END = 0x10;
     static final byte IS_INDIRECT = 0x20;
     static final byte IS_OPEN_CONNECTION = 0x40;
     static final byte REQUEST_RESEND = (byte)0x80;
@@ -56,7 +55,10 @@ public class DatagramSocketCommunication extends Communication {
     /**
      * the Thread that handles all read on the DatagramSocket
      */
-    private Thread serverAcceptingThread;
+    private Thread readingThread;
+
+    private DatagramSocket datagramSocket;
+    private final DatagramPacket defaultReceivePacket;
 
     //arrays that represent the standard headers for new transmissions
     private byte[] reliableHeader = new byte[21];
@@ -72,6 +74,9 @@ public class DatagramSocketCommunication extends Communication {
         super(isServer, port);
         //initialize data structures
         this.isServer = isServer;
+        if (isServer) {
+            setClientID((short)0);
+        }
         this.port = port;
         receivedTransmissions = new ConcurrentLinkedQueue<>();
         connections = new ConcurrentHashMap<>();
@@ -79,6 +84,29 @@ public class DatagramSocketCommunication extends Communication {
         outputStreamPool = new ArrayDeque<>();
         setFlag(reliableHeader, IS_RELIABLE, true);
         setFlag(unreliableHeader, IS_RELIABLE, false);
+        try {
+            datagramSocket = new DatagramSocket(port);
+        } catch (SocketException e) {
+            System.out.println("exception creating DatagramSocket");
+            e.printStackTrace();
+        }
+        defaultReceivePacket = new DatagramPacket(new byte[MAX_SIZE + 10], MAX_SIZE + 10);
+        readingThread = new Thread() {
+            @Override
+            public void run() {
+                super.run();
+                while (!datagramSocket.isClosed()) {
+                    try {
+                        datagramSocket.receive(defaultReceivePacket);
+                        handleMsg(Arrays.copyOf(defaultReceivePacket.getData(), defaultReceivePacket.getLength()));
+                    } catch (IOException e) {
+                        System.err.println("error while reading packet");
+                        e.printStackTrace();
+                    }
+                }
+            }
+        };
+        readingThread.start();
     }
 
     @Override
@@ -150,7 +178,14 @@ public class DatagramSocketCommunication extends Communication {
      * internal helper method to send a msg to a specific peer
      */
     private void sendTo(int peer, byte[] msg) {
-        //TODO implementation
+        writeShort(msg, 3, clientID);
+        writeShort(msg, 0, PROTOCOL_ID);
+        Connection connection = connections.get(peer);
+        if (connection != null) {
+            connection.send(msg);
+        } else {
+            System.out.println("cannot send to " + peer);
+        }
     }
 
     @Override
@@ -165,7 +200,7 @@ public class DatagramSocketCommunication extends Communication {
 
     @Override
     public Set<Integer> getPeers() {
-        return null;
+        return Collections.unmodifiableSet(peerSet);
     }
 
     @Override
@@ -175,11 +210,19 @@ public class DatagramSocketCommunication extends Communication {
 
     @Override
     public void close() throws IOException {
-
+        datagramSocket.close();
     }
 
-    private void sendMsgInternal(byte[] msg, String ip, int port) {
-        //TODO implementation
+    private void handleMsg(byte[] packet) {//TODO
+    }
+
+    private synchronized void sendMsgInternal(byte[] msg, String ip, int port) {
+        DatagramPacket packet = new DatagramPacket(msg, msg.length, new InetSocketAddress(ip, port));
+        try {
+            datagramSocket.send(packet);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     private void setClientID(short clientID) {
@@ -230,6 +273,20 @@ public class DatagramSocketCommunication extends Communication {
 
     static boolean readFlag(byte[] msg, byte flag) {
         return ((msg[2] & flag) & 0xFF) != 0;
+    }
+
+    static void printMsg(byte[] msg) {
+        System.out.printf("protocol id: %d%n", readShort(msg, 0));
+        System.out.printf("client id: %d%n", readShort(msg, 3));
+        System.out.printf("sys: %b reliable: %b partial: %b indirect: %b open: %b%n",
+                readFlag(msg, IS_SYSTEM), readFlag(msg, IS_RELIABLE), readFlag(msg, IS_PARTIAL),
+                readFlag(msg, IS_INDIRECT), readFlag(msg, IS_OPEN_CONNECTION));
+        System.out.printf("indirect target: %d%n", readShort(msg, 5));
+        System.out.printf("amount parts: %d%n", readShort(msg, 7));
+        System.out.printf("sequence: %d%n", readInt(msg, 9));
+        System.out.printf("ack: %d%n", readInt(msg, 13));
+        System.out.printf("ack field: %s%n", String.format("%16s",
+                Integer.toBinaryString(readInt(msg, 17))).replace(' ', '0'));
     }
 
     private class Connection extends Thread {
@@ -329,6 +386,7 @@ public class DatagramSocketCommunication extends Communication {
                     }
                 }
             };
+            connectThread.start();
         }
 
         /**
