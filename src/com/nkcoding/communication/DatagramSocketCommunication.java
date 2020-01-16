@@ -30,6 +30,13 @@ public class DatagramSocketCommunication extends Communication {
     private short clientID;
 
     /**
+     * is this the server?
+     */
+    private boolean isServer;
+
+    private int port;
+
+    /**
      * list with all received transmissions, ready for the user
      */
     private final ConcurrentLinkedQueue<DataInputStream> receivedTransmissions;
@@ -51,6 +58,10 @@ public class DatagramSocketCommunication extends Communication {
      */
     private Thread serverAcceptingThread;
 
+    //arrays that represent the standard headers for new transmissions
+    private byte[] reliableHeader = new byte[21];
+    private byte[] unreliableHeader = new byte[21];
+
     /**
      * create a new communication instance
      *
@@ -60,10 +71,14 @@ public class DatagramSocketCommunication extends Communication {
     public DatagramSocketCommunication(boolean isServer, int port) {
         super(isServer, port);
         //initialize data structures
+        this.isServer = isServer;
+        this.port = port;
         receivedTransmissions = new ConcurrentLinkedQueue<>();
         connections = new ConcurrentHashMap<>();
         peerSet = new CopyOnWriteArraySet<>();
         outputStreamPool = new ArrayDeque<>();
+        setFlag(reliableHeader, IS_RELIABLE, true);
+        setFlag(unreliableHeader, IS_RELIABLE, false);
     }
 
     @Override
@@ -75,12 +90,15 @@ public class DatagramSocketCommunication extends Communication {
     public synchronized ResetDataOutputStream getOutputStream(boolean reliable) {
         ResetDataOutputStream dataOutputStream;
         if (outputStreamPool.isEmpty()) {
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             dataOutputStream = new ResetDataOutputStream();
         } else {
             dataOutputStream = outputStreamPool.poll();
         }
-        //TODO set header and position
+        try {
+            dataOutputStream.write(reliable ? reliableHeader : unreliableHeader);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
         return dataOutputStream;
     }
 
@@ -128,18 +146,21 @@ public class DatagramSocketCommunication extends Communication {
         }
     }
 
+    /**
+     * internal helper method to send a msg to a specific peer
+     */
     private void sendTo(int peer, byte[] msg) {
         //TODO implementation
     }
 
     @Override
     public boolean hasTransmissions() {
-        return false;
+        return !receivedTransmissions.isEmpty();
     }
 
     @Override
     public DataInputStream getTransmission() {
-        return null;
+        return receivedTransmissions.poll();
     }
 
     @Override
@@ -149,7 +170,7 @@ public class DatagramSocketCommunication extends Communication {
 
     @Override
     public int getId() {
-        return 0;
+        return clientID;
     }
 
     @Override
@@ -157,8 +178,18 @@ public class DatagramSocketCommunication extends Communication {
 
     }
 
-    private void sendMsgInternal(byte[] msg) {
+    private void sendMsgInternal(byte[] msg, String ip, int port) {
         //TODO implementation
+    }
+
+    private void setClientID(short clientID) {
+        this.clientID = clientID;
+        writeShort(reliableHeader, 3, clientID);
+        writeShort(unreliableHeader, 3, clientID);
+    }
+
+    public short getClientID() {
+        return clientID;
     }
 
     public static void writeInt(byte[] msg, int offset, int val) {
@@ -201,18 +232,14 @@ public class DatagramSocketCommunication extends Communication {
         return ((msg[2] & flag) & 0xFF) != 0;
     }
 
-    public short getClientID() {
-        return clientID;
-    }
-
     private class Connection extends Thread {
         private short remoteID;
 
         private String remoteIP;
         private int remotePort;
 
-        private boolean connected = false;
-        private boolean isIndirect = false;
+        private volatile boolean connected = false;
+        private volatile boolean isIndirect = false;
 
         //calculates the amount of newer packages and requests a resend if this exceeded 5
         private int resendRequestCounter = 0;
@@ -273,8 +300,43 @@ public class DatagramSocketCommunication extends Communication {
             this.lastResendTimestamp = System.currentTimeMillis();
         }
 
+        /**
+         * start the connecting process
+         */
         private void connect() {
+            Thread connectThread = new Thread() {
+                @Override
+                public void run() {
+                    super.run();
+                    for (int i = 0; i < 5; i++) {
+                        if (!connected) {
+                            connectInternal();
+                        }
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    //set to indirect if it was not possible to connect
+                    if (!connected) {
+                        if (remoteID == 0) {
+                            System.out.println("failed to connect to server");
+                        } else {
+                            System.out.println("failed to connect, set to indirect");
+                            isIndirect = true;
+                        }
+                    }
+                }
+            };
+        }
 
+        /**
+         * called internally
+         */
+        private void connectInternal() {
+            //TODO implementation
+            
         }
 
         /**
@@ -333,7 +395,7 @@ public class DatagramSocketCommunication extends Communication {
                 writeInt(msg, 17, ackField);
                 sequence++;
                 sentMessagesBuffer.addLast(msg);
-                sendMsgInternal(msg);
+                sendMsgInternal(msg, remoteIP, remotePort);
             }
         }
 
@@ -512,7 +574,7 @@ public class DatagramSocketCommunication extends Communication {
                 while (index < 32 && iter.hasNext()) {
                     byte[] msg = iter.next();
                     if ((sequenceAckField & (1 << index)) != 0) {
-                        sendMsgInternal(msg);
+                        sendMsgInternal(msg, remoteIP, remotePort);
                     }
                     index++;
                 }
