@@ -1,9 +1,6 @@
 package com.nkcoding.communication;
 
-import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -27,15 +24,36 @@ public class DatagramSocketCommunication extends Communication {
     private static final int MAX_SIZE = 1310;
 
 
-    //the id for this client
+    /**
+     * the id for this client
+     */
     private short clientID;
 
+    /**
+     * list with all received transmissions, ready for the user
+     */
     private final ConcurrentLinkedQueue<DataInputStream> receivedTransmissions;
 
+    /**
+     * map with all connections
+     */
     private final ConcurrentMap<Integer, Connection> connections;
 
+    /**
+     * set with all indexes of connections, used for faster return
+     */
     private final CopyOnWriteArraySet<Integer> peerSet;
 
+    /**
+     * translates the DataOutputStream to the underlying ByteArrayOutputStream
+     */
+    private final Map<DataOutputStream, ByteArrayOutputStream> streamTranslation;
+
+    private final Deque<DataOutputStream> outputStreamPool;
+
+    /**
+     * the Thread that handles all read on the DatagramSocket
+     */
     private Thread serverAcceptingThread;
 
     /**
@@ -50,6 +68,8 @@ public class DatagramSocketCommunication extends Communication {
         receivedTransmissions = new ConcurrentLinkedQueue<>();
         connections = new ConcurrentHashMap<>();
         peerSet = new CopyOnWriteArraySet<>();
+        streamTranslation = new IdentityHashMap<>();
+        outputStreamPool = new ArrayDeque<>();
     }
 
     @Override
@@ -58,18 +78,44 @@ public class DatagramSocketCommunication extends Communication {
     }
 
     @Override
-    public DataOutputStream getOutputStream(boolean reliable) {
-        return null;
+    public synchronized DataOutputStream getOutputStream(boolean reliable) {
+        DataOutputStream dataOutputStream;
+        if (outputStreamPool.isEmpty()) {
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            dataOutputStream = new DataOutputStream(outputStream);
+            streamTranslation.put(dataOutputStream, outputStream);
+        } else {
+            dataOutputStream = outputStreamPool.poll();
+        }
+        //TODO set header and position
+        return dataOutputStream;
     }
 
     @Override
-    public void sendTo(int peer, DataOutputStream transmission) {
+    public synchronized void sendTo(int peer, DataOutputStream transmission) {
+        try {
+            transmission.flush();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        sendTo(peer, streamTranslation.get(transmission).toByteArray());
 
     }
 
     @Override
-    public void sendToAll(DataOutputStream transmission) {
+    public synchronized void sendToAll(DataOutputStream transmission) {
+        try {
+            transmission.flush();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        for (int peer : peerSet) {
+            sendTo(peer, streamTranslation.get(transmission).toByteArray());
+        }
+    }
 
+    private void sendTo(int peer, byte[] msg) {
+        //TODO implementation
     }
 
     @Override
