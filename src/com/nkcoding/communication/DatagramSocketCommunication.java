@@ -44,12 +44,7 @@ public class DatagramSocketCommunication extends Communication {
      */
     private final CopyOnWriteArraySet<Integer> peerSet;
 
-    /**
-     * translates the DataOutputStream to the underlying ByteArrayOutputStream
-     */
-    private final Map<DataOutputStream, ByteArrayOutputStream> streamTranslation;
-
-    private final Deque<DataOutputStream> outputStreamPool;
+    private final Deque<ResetDataOutputStream> outputStreamPool;
 
     /**
      * the Thread that handles all read on the DatagramSocket
@@ -68,7 +63,6 @@ public class DatagramSocketCommunication extends Communication {
         receivedTransmissions = new ConcurrentLinkedQueue<>();
         connections = new ConcurrentHashMap<>();
         peerSet = new CopyOnWriteArraySet<>();
-        streamTranslation = new IdentityHashMap<>();
         outputStreamPool = new ArrayDeque<>();
     }
 
@@ -78,12 +72,11 @@ public class DatagramSocketCommunication extends Communication {
     }
 
     @Override
-    public synchronized DataOutputStream getOutputStream(boolean reliable) {
-        DataOutputStream dataOutputStream;
+    public synchronized ResetDataOutputStream getOutputStream(boolean reliable) {
+        ResetDataOutputStream dataOutputStream;
         if (outputStreamPool.isEmpty()) {
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            dataOutputStream = new DataOutputStream(outputStream);
-            streamTranslation.put(dataOutputStream, outputStream);
+            dataOutputStream = new ResetDataOutputStream();
         } else {
             dataOutputStream = outputStreamPool.poll();
         }
@@ -92,25 +85,46 @@ public class DatagramSocketCommunication extends Communication {
     }
 
     @Override
-    public synchronized void sendTo(int peer, DataOutputStream transmission) {
+    public synchronized void sendTo(int peer, ResetDataOutputStream transmission) {
         try {
             transmission.flush();
         } catch (IOException e) {
             e.printStackTrace();
         }
-        sendTo(peer, streamTranslation.get(transmission).toByteArray());
-
+        sendTo(peer, transmission.toByteArray());
+        try {
+            transmission.reset();
+            outputStreamPool.add(transmission);
+        } catch (IOException e) {
+            e.printStackTrace();
+            try {
+                transmission.close();
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }
+        }
     }
 
     @Override
-    public synchronized void sendToAll(DataOutputStream transmission) {
+    public synchronized void sendToAll(ResetDataOutputStream transmission) {
         try {
             transmission.flush();
         } catch (IOException e) {
             e.printStackTrace();
         }
         for (int peer : peerSet) {
-            sendTo(peer, streamTranslation.get(transmission).toByteArray());
+            sendTo(peer, transmission.toByteArray());
+        }
+        try {
+            transmission.reset();
+            outputStreamPool.add(transmission);
+        } catch (IOException e) {
+            e.printStackTrace();
+            try {
+                transmission.close();
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }
         }
     }
 
