@@ -4,10 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.ListIterator;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.*;
 
 public class DatagramSocketCommunication extends Communication {
@@ -18,13 +15,17 @@ public class DatagramSocketCommunication extends Communication {
     static final byte IS_SYSTEM = 0x01;
     static final byte IS_RELIABLE = 0x02;
     static final byte IS_PARTIAL = 0x04;
-    static final byte IS_PARTIAL_START = 0x08;
-    static final byte IS_PARTIAL_END = 0x10;
+//    static final byte IS_PARTIAL_START = 0x08;
+//    static final byte IS_PARTIAL_END = 0x10;
     static final byte IS_INDIRECT = 0x20;
     static final byte IS_OPEN_CONNECTION = 0x40;
+    static final byte REQUEST_RESEND = (byte)0x80;
 
     private static final short PROTOCOL_ID = 8001;
     private static final int HEADER_SIZE = 21;
+    private static final int MIN_RESEND_TIMEOUT = 100;
+    private static final int MAX_SIZE = 1310;
+
 
     //the id for this client
     private short clientID;
@@ -96,6 +97,10 @@ public class DatagramSocketCommunication extends Communication {
 
     }
 
+    private void sendMsgInternal(byte[] msg) {
+        //TODO implementation
+    }
+
     public static void writeInt(byte[] msg, int offset, int val) {
         msg[offset] = (byte)(val >>> 24);
         msg[offset + 1] = (byte)(val >>> 16);
@@ -149,6 +154,9 @@ public class DatagramSocketCommunication extends Communication {
         private boolean connected = false;
         private boolean isIndirect = false;
 
+        //calculates the amount of newer packages and requests a resend if this exceeded 5
+        private int resendRequestCounter = 0;
+
         /**
          * represents the next EXPECTED message, NOT the last received one
          */
@@ -166,9 +174,9 @@ public class DatagramSocketCommunication extends Communication {
         /**
          * the sequence Number that LAST was acknowledged
          */
-        private int sequenceAcknowledged = -1;
+        private int sequenceAck = -1;
 
-        private int sequenceAcknowledgedField = 0xFFFFFFFF;
+        private int sequenceAckField = 0xFFFFFFFF;
 
         private volatile boolean shutdown = false;
 
@@ -183,6 +191,11 @@ public class DatagramSocketCommunication extends Communication {
         private LinkedList<byte[]> reliableMessageBuffer = new LinkedList<>();
 
         /**
+         * a queue with all the messages send but not acknowledged
+         */
+        private LinkedList<byte[]> sentMessagesBuffer = new LinkedList<>();
+
+        /**
          * the offset for the reliableMessageBuffer compared to the message's sequence
          * for example if the msg at position 0 in the buffer came with the sequenceNumber 10, then offset is 10
          */
@@ -192,9 +205,12 @@ public class DatagramSocketCommunication extends Communication {
          */
         private int partialMessageLength = 1;
 
+        private long lastResendTimestamp;
+
         public Connection(String remoteIP, int remotePort) {
             this.remoteIP = remoteIP;
             this.remotePort = remotePort;
+            this.lastResendTimestamp = System.currentTimeMillis();
         }
 
         private void connect() {
@@ -202,38 +218,123 @@ public class DatagramSocketCommunication extends Communication {
         }
 
         /**
+         * handles all partial stuff, rest is done by sendInternal
+         * @param msg the message to send
+         */
+        private synchronized void send(byte[] msg) {
+            if (readFlag(msg, IS_RELIABLE) && msg.length > MAX_SIZE) {
+                int parts = (msg.length - HEADER_SIZE) / (Communication.MAX_SIZE);
+                for (int i = 0; i < parts - 1; i++) {
+                    byte[] msgPart = new byte[HEADER_SIZE + Communication.MAX_SIZE];
+                    System.arraycopy(msg, 0, msgPart, 0, HEADER_SIZE);
+                    System.arraycopy(msg, Communication.MAX_SIZE * i + HEADER_SIZE, msgPart, HEADER_SIZE, Communication.MAX_SIZE);
+                    writeShort(msgPart, 7, (short)parts);
+                    setFlag(msg, IS_PARTIAL, true);
+                    sendInternal(msgPart);
+                }
+                //send the last part which has a special length
+                byte[] msgLastPart = new byte[msg.length - Communication.MAX_SIZE * (parts - 1)];
+                System.arraycopy(msg, 0, msgLastPart, 0, HEADER_SIZE);
+                System.arraycopy(msg, Communication.MAX_SIZE * (parts - 1) + HEADER_SIZE, msgLastPart, HEADER_SIZE, msgLastPart.length - HEADER_SIZE);
+                writeShort(msgLastPart, 7, (short)parts);
+                setFlag(msg, IS_PARTIAL, true);
+                sendInternal(msgLastPart);
+            } else {
+                //nothing to do here, if it is to long than there's nothing I can do
+                sendInternal(msg);
+            }
+        }
+
+        /**
          * sends a message
          * sets isIndirect and indirectTarget if indirect
          * sets remoteId, sequence, ack and ackField if NOT indirect
+         * requires the following fields to be set:
+         * <ul>
+         *     <li>protocolID</li>
+         *     <li>clientID</li>
+         *     <li>isSystem, isReliable, </li>
+         *     <li>all partial stuff</li>
+         * </ul>
          * @param msg the message to send
          */
-        private void sendInternal(byte[] msg) {
-            //set indirect flag
+        private synchronized void sendInternal(byte[] msg) {
             if (isIndirect) {
+                //set indirect flag
                 setFlag(msg, IS_INDIRECT, true);
                 writeShort(msg, 5, remoteID);
+                //send via server
+                connections.get(0).sendInternal(msg);
             } else {
+                setFlag(msg, REQUEST_RESEND, resendRequestCounter > 3);
                 writeShort(msg, 3, remoteID);
                 writeInt(msg, 9, sequence);
                 writeInt(msg, 13, ack);
                 writeInt(msg, 17, ackField);
+                sequence++;
+                sentMessagesBuffer.addLast(msg);
+                sendMsgInternal(msg);
             }
-            //TODO
         }
 
         /**
          * handles a raw received message byte array
          */
         private void receiveInternal(byte[] msg) {
-            int acknowledged = readInt(msg, 13);
-            if (acknowledged > sequenceAcknowledged) {
-                sequenceAcknowledgedField >>>= (acknowledged - sequenceAcknowledged);
-                sequenceAcknowledgedField |= readInt(msg, 17);
-            }
+            handleSequenceAckAndResend(msg);
             if (readFlag(msg, IS_RELIABLE)) {
                 handleReliableMessage(msg);
             } else {
+                //special handling to use unreliable messages to request a resend
+                int seq = readInt(msg, 9);
+                if (seq > ack) {
+                    resendRequestCounter++;
+                }
                 handleReceivedMessage(msg, HEADER_SIZE);
+            }
+        }
+
+        private void handleSequenceAckAndResend(byte[] msg) {
+            int acknowledged = readInt(msg, 13);
+            int seq = readInt(msg, 9);
+            boolean resend = false;
+            //check if the packet is new enough to do all this stuff
+            if (acknowledged >= sequenceAck) {
+                //reset the counter, because a new reliable msg was registered, so a request would happen on its own
+                if (seq > ack && readFlag(msg, IS_RELIABLE)) {
+                    resendRequestCounter = 0;
+                }
+                //update sequenceAck, sequenceAckField and the sentMessagesBuffer
+                sequenceAckField >>>= (acknowledged - sequenceAck);
+                for (int i = 0; i < acknowledged - sequenceAck; i++) {
+                    //these messages are proven sent, so remove these
+                    sentMessagesBuffer.removeFirst();
+                }
+                sequenceAckField |= readInt(msg, 17);
+                sequenceAck = acknowledged;
+                //find the newest acknowledged and resend all older
+                for (int i = 31; i > 0; i--) {
+                    //check if the bit is set
+                    if ((sequenceAckField & (1 << i)) != 0) {
+                        //check if all previous were send, if not resend
+                        int mask = ((1 << i) - 1);
+                        if ((mask & sequenceAckField) != mask) {
+                            System.out.println("resend from mask");
+                            resend = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            //resend if it is requested
+            if (readFlag(msg, REQUEST_RESEND)) {
+                System.out.println("resend because requested");
+                resend = true;
+            }
+
+            //resend if necessary
+            if (resend) {
+                resend();
             }
         }
 
@@ -247,15 +348,11 @@ public class DatagramSocketCommunication extends Communication {
             //ensure the capacity
             if (msgSequence - messageBufferOffset > reliableMessageBuffer.size()) {
                 for (int i = 0; i < reliableMessageBuffer.size() - msgSequence + messageBufferOffset; i++) {
-                    reliableMessageBuffer.add(null);
+                    reliableMessageBuffer.addLast(null);
                 }
             }
             //add it to the buffer
             reliableMessageBuffer.set(msgSequence - messageBufferOffset, msg);
-            //update partialMessageLength if necessary
-            if (msgSequence == ack) {
-                partialMessageLength = (readFlag(msg, IS_PARTIAL)) ? readShort(msg, 7) : 1;
-            }
             //check if it has to be handled by updateAcknowledged
             if ((msgSequence - messageBufferOffset) < 32) {
                 ackField |= (1 << (msgSequence - messageBufferOffset));
@@ -270,10 +367,16 @@ public class DatagramSocketCommunication extends Communication {
         private void tryReceiveReliableMessage() {
             boolean receivedAll = false;
             while (!receivedAll) {
+                //update partialMessagesLength
+                byte[] firstMsg = reliableMessageBuffer.getFirst();
+                if (firstMsg != null) {
+                    partialMessageLength = readFlag(firstMsg, IS_PARTIAL) ?  readShort(firstMsg, 7) : 1;
+                }
+
                 Iterator<byte[]> iter = reliableMessageBuffer.iterator();
                 int amount = 0;
                 int totalSize = 0;
-                while (amount < messageBufferOffset && iter.hasNext()) {
+                while (amount < partialMessageLength && iter.hasNext()) {
                     byte[] bytes = iter.next();
                     if (bytes == null) {
                         receivedAll = true;
@@ -340,6 +443,24 @@ public class DatagramSocketCommunication extends Communication {
         }
 
         /**
+         * resend the messages that are not acknowledged
+         */
+        private void resend() {
+            if (System.currentTimeMillis() - lastResendTimestamp > MIN_RESEND_TIMEOUT) {
+                int index = 0;
+                Iterator<byte[]> iter = sentMessagesBuffer.iterator();
+                while (index < 32 && iter.hasNext()) {
+                    byte[] msg = iter.next();
+                    if ((sequenceAckField & (1 << index)) != 0) {
+                        sendMsgInternal(msg);
+                    }
+                    index++;
+                }
+                lastResendTimestamp = System.currentTimeMillis();
+            }
+        }
+
+        /**
          * handles a system message
          */
         private void handleSystemMessage(DataInputStream inputStream) {
@@ -355,6 +476,8 @@ public class DatagramSocketCommunication extends Communication {
                     receiveInternal(msg);
                 } catch (InterruptedException e) {
                     System.out.println("did not receive anything: " + remoteID);
+                    System.out.println("resend from timeout");
+                    resend();
                 }
             }
         }
