@@ -642,9 +642,10 @@ public class DatagramSocketCommunication extends Communication {
          */
         private void connectInternal() {
             if (!connected) {
-                byte[] msg = getSystemMsg(OPEN_CONNECTION, 0);
+                byte[] msg = getSystemMsg(OPEN_CONNECTION, 2);
                 setFlag(msg, IS_RELIABLE, false);
                 setFlag(msg, IS_OPEN_CONNECTION, true);
+                writeShort(msg, HEADER_SIZE + 2, clientID);
                 sendInternal(msg);
             }
         }

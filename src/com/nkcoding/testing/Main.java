@@ -1,7 +1,11 @@
 package com.nkcoding.testing;
 
 import com.nkcoding.communication.DatagramSocketCommunication;
+import com.nkcoding.communication.ResetDataOutputStream;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Arrays;
@@ -42,18 +46,38 @@ public class Main {
         while (!cmd.equals("exit")) {
             switch(cmd) {
                 case "p":
-                    System.out.println(communication.getTransmission());
+                    try {
+                        if (communication.hasTransmissions())
+                            System.out.println(communication.getTransmission().readUTF());
+                        else
+                            System.out.println("--no transmission--");
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
                     break;
                 case "s":
                     System.out.println("enter message");
-                    //communication.sendToAll(new StringTransmission(1, in.nextLine()));
+                    ResetDataOutputStream rdo = communication.getOutputStream(true);
+                    try {
+                        rdo.writeUTF(in.nextLine());
+                        communication.sendToAll(rdo);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
                     break;
                 case "st":
                     System.out.println("enter peer id");
-                    int id = in.nextInt();
+                    short id = in.nextShort();
                     in.nextLine();
                     System.out.println("enter message");
-                    //communication.sendTo(id, new StringTransmission(1, in.nextLine()));
+                    String message = in.nextLine();
+                    ResetDataOutputStream outputStream = communication.getOutputStream(true);
+                    try {
+                        outputStream.writeUTF(message);
+                        communication.sendTo(id, outputStream);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
                     break;
                 case "id":
                     System.out.println(communication.getId());
