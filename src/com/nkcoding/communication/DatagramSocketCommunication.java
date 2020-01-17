@@ -597,8 +597,8 @@ public class DatagramSocketCommunication extends Communication {
                 @Override
                 public void run() {
                     super.run();
-                    for (int i = 0; i < 1; i++) {
-                        if (!connected) {
+                    for (int i = 0; i < 5; i++) {
+                        if (!connected || true) {
                             connectInternal();
                         }
                         try {
@@ -608,7 +608,7 @@ public class DatagramSocketCommunication extends Communication {
                         }
                     }
                     //set to indirect if it was not possible to connect
-                    if (!connected && false) {
+                    if (!connected) {
                         if (remoteID == 0) {
                             System.out.println("failed to connect to server");
                             throw new IllegalStateException();
@@ -935,30 +935,31 @@ public class DatagramSocketCommunication extends Communication {
         private void activateIndirect(boolean sendToPeer) {
             if (remoteID == 0 || clientID == 0) {
                 System.err.println("cannot make indirect: connection to server");
-                throw new IllegalStateException();
-            }
-            isIndirect = true;
-            if (sendToPeer) {
-                byte[] indirectMsg = getSystemMsg(SET_INDIRECT, 0);
-                send(indirectMsg);
-            }
-            //send all the unsent messages
-            try {
-                byte[] headerAndID = getSystemMsg(REDIRECT_UNSENT_MSG, 0);
-                ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-                DataOutputStream dataOutputStream = new DataOutputStream(outputStream);
-                dataOutputStream.write(headerAndID);
-                dataOutputStream.writeShort(sentMessagesBuffer.size());
-                for (byte[] msg : sentMessagesBuffer) {
-                    dataOutputStream.writeShort(msg.length);
-                    dataOutputStream.write(msg);
+                removeConnection(remoteID);
+            } else {
+                isIndirect = true;
+                if (sendToPeer) {
+                    byte[] indirectMsg = getSystemMsg(SET_INDIRECT, 0);
+                    send(indirectMsg);
                 }
-                dataOutputStream.flush();
-                byte[] unsentMsgMsg = outputStream.toByteArray();
-                send(unsentMsgMsg);
-                dataOutputStream.close();
-            } catch (IOException e) {
-                System.err.println("cannot write sentMessagesBuffer");
+                //send all the unsent messages
+                try {
+                    byte[] headerAndID = getSystemMsg(REDIRECT_UNSENT_MSG, 0);
+                    ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+                    DataOutputStream dataOutputStream = new DataOutputStream(outputStream);
+                    dataOutputStream.write(headerAndID);
+                    dataOutputStream.writeShort(sentMessagesBuffer.size());
+                    for (byte[] msg : sentMessagesBuffer) {
+                        dataOutputStream.writeShort(msg.length);
+                        dataOutputStream.write(msg);
+                    }
+                    dataOutputStream.flush();
+                    byte[] unsentMsgMsg = outputStream.toByteArray();
+                    send(unsentMsgMsg);
+                    dataOutputStream.close();
+                } catch (IOException e) {
+                    System.err.println("cannot write sentMessagesBuffer");
+                }
             }
         }
 
