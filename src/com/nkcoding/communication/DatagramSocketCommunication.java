@@ -7,8 +7,8 @@ import java.util.concurrent.*;
 
 public class DatagramSocketCommunication extends Communication {
 
-    private static final int RECEIVE_TIMEOUT = 500;
-    private static final int RESEND_TIMEOUT = 500;
+    private static final int RECEIVE_TIMEOUT = 800;
+    private static final int RESEND_TIMEOUT = 100;
 
     static final byte IS_SYSTEM = 0x01;
     static final byte IS_RELIABLE = 0x02;
@@ -19,8 +19,41 @@ public class DatagramSocketCommunication extends Communication {
 
     private static final short PROTOCOL_ID = 8001;
     private static final int HEADER_SIZE = 21;
-    private static final int MIN_RESEND_TIMEOUT = 100;
     private static final int MAX_SIZE = 1310;
+
+    /**
+     * requests to open a connection
+     * 0 arguments (right now)
+     */
+    private static final short OPEN_CONNECTION = 1;
+    /**
+     * acks the open connection
+     * short: new id (or -1 if not server)
+     */
+    private static final short ACK_OPEN_CONNECTION = 2;
+    /**
+     * sends a timeout warning, also used to update
+     * 0 arguments
+     */
+    private static final short TIMEOUT_WARNING = 3;
+    /**
+     * sends an acl fpr tje timeout warning, used to update
+     * requests a resend (normally)
+     * 0 arguments
+     */
+    private static final short ACK_TIMEOUT_WARNING = 8;
+    /**
+     * sets a connection to indirect if it was set by one side to indirect
+     * 0 arguments
+     */
+    private static final short SET_INDIRECT = 4;
+    /**
+     * sets the peers
+     * short length
+     * (short id, short addressLength, byte[addressLength] address, int port)[length]
+     */
+    private static final short SET_PEERS = 7;
+
 
 
     /**
@@ -36,6 +69,13 @@ public class DatagramSocketCommunication extends Communication {
     private int port;
 
     /**
+     * the next id for a client
+     * is increased, if it is used
+     * has only effect if isServer
+     */
+    private short idCounter = 1;
+
+    /**
      * list with all received transmissions, ready for the user
      */
     private final ConcurrentLinkedQueue<DataInputStream> receivedTransmissions;
@@ -43,12 +83,12 @@ public class DatagramSocketCommunication extends Communication {
     /**
      * map with all connections
      */
-    private final ConcurrentMap<Integer, Connection> connections;
+    private final ConcurrentMap<Short, Connection> connections;
 
     /**
      * set with all indexes of connections, used for faster return
      */
-    private final CopyOnWriteArraySet<Integer> peerSet;
+    private final CopyOnWriteArraySet<Short> peerSet;
 
     private final Deque<ResetDataOutputStream> outputStreamPool;
 
@@ -98,7 +138,7 @@ public class DatagramSocketCommunication extends Communication {
                 while (!datagramSocket.isClosed()) {
                     try {
                         datagramSocket.receive(defaultReceivePacket);
-                        handleMsg(Arrays.copyOf(defaultReceivePacket.getData(), defaultReceivePacket.getLength()));
+                        handleMsg(Arrays.copyOf(defaultReceivePacket.getData(), defaultReceivePacket.getLength()), defaultReceivePacket);
                     } catch (IOException e) {
                         System.err.println("error while reading packet");
                         e.printStackTrace();
@@ -131,7 +171,7 @@ public class DatagramSocketCommunication extends Communication {
     }
 
     @Override
-    public synchronized void sendTo(int peer, ResetDataOutputStream transmission) {
+    public synchronized void sendTo(short peer, ResetDataOutputStream transmission) {
         try {
             transmission.flush();
         } catch (IOException e) {
@@ -158,7 +198,7 @@ public class DatagramSocketCommunication extends Communication {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        for (int peer : peerSet) {
+        for (short peer : peerSet) {
             sendTo(peer, transmission.toByteArray());
         }
         try {
@@ -177,7 +217,7 @@ public class DatagramSocketCommunication extends Communication {
     /**
      * internal helper method to send a msg to a specific peer
      */
-    private void sendTo(int peer, byte[] msg) {
+    private void sendTo(short peer, byte[] msg) {
         writeShort(msg, 3, clientID);
         writeShort(msg, 0, PROTOCOL_ID);
         Connection connection = connections.get(peer);
@@ -199,25 +239,102 @@ public class DatagramSocketCommunication extends Communication {
     }
 
     @Override
-    public Set<Integer> getPeers() {
+    public Set<Short> getPeers() {
         return Collections.unmodifiableSet(peerSet);
     }
 
     @Override
-    public int getId() {
+    public short getId() {
         return clientID;
     }
 
     @Override
-    public void close() throws IOException {
+    public void close() {
+        this.readingThread.interrupt();
         datagramSocket.close();
+        for (Connection connection : connections.values()) {
+            try {
+                connection.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
-    private void handleMsg(byte[] packet) {//TODO
+    /**
+     * handle a message
+     * DOES NOT MODIFY source
+     */
+    private void handleMsg(byte[] msg, DatagramPacket source) {
+        System.out.println("---------------MESSAGE-----------------");
+        printMsg(msg);
+
+        //redirect if necessary
+        boolean isIndirect = readFlag(msg, IS_INDIRECT);
+        if (isIndirect && isServer) {
+            short target = readShort(msg, 5);
+            short origin = readShort(msg, 3);
+            writeShort(msg, 5, origin);
+            writeShort(msg, 3, target);
+            sendTo(target, msg);
+        } else if (readFlag(msg, IS_OPEN_CONNECTION)) {
+            InetSocketAddress socketAddress = (InetSocketAddress)source.getSocketAddress();
+            String ip = socketAddress.getAddress().getHostAddress();
+            int port = socketAddress.getPort();
+            System.out.printf("incoming connection: ip=%s, port=%d%n", ip, port);
+
+            if (isServer) {
+                try {
+                    idCounter++;
+                    Connection connection = new Connection(socketAddress, idCounter);
+                    ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+                    DataOutputStream dataOutputStream = new DataOutputStream(outputStream);
+                    short connectionCount = 0;
+                    for (Connection connectTo : connections.values()) {
+                        connectionCount++;
+                        dataOutputStream.writeShort(connectTo.getRemoteID());
+                        byte[] address = connectTo.socketAdress.getAddress().getAddress();
+                        dataOutputStream.writeShort(address.length);
+                        dataOutputStream.write(address);
+                        dataOutputStream.writeInt(connectTo.socketAdress.getPort());
+                    }
+                    dataOutputStream.flush();
+                    byte[] msgData = outputStream.toByteArray();
+                    byte[] peersMsg = getSystemMsg(SET_PEERS, 2 + msgData.length);
+                    writeShort(peersMsg, HEADER_SIZE + 2, connectionCount);
+                    System.arraycopy(msgData, 0, peersMsg, HEADER_SIZE + 4,msgData.length);
+                    dataOutputStream.close();
+                    //send with the additional init message
+                    connection.startAndAcknowledge(false, peersMsg);
+                } catch (IOException e) {
+                    throw new IllegalStateException(e);
+                }
+
+            } else {
+                Connection connection = new Connection(socketAddress);
+                connection.startAndAcknowledge(false);
+            }
+        } else {
+            short remoteID = readShort(msg, 3);
+            Connection connection = connections.get(remoteID);
+            if (connection != null) {
+                connection.receive(msg);
+            } else {
+                if (isIndirect) {
+                    System.out.println("create new client via indirect");
+                    InetSocketAddress socketAddress = (InetSocketAddress)source.getSocketAddress();
+                    Connection newIndirectConnection = new Connection(socketAddress, remoteID);
+                    newIndirectConnection.startAndAcknowledge(true);
+                } else {
+                    System.err.println("CANNOT RECEIVE MSG");
+                    printMsg(msg);
+                }
+            }
+        }
     }
 
-    private synchronized void sendMsgInternal(byte[] msg, String ip, int port) {
-        DatagramPacket packet = new DatagramPacket(msg, msg.length, new InetSocketAddress(ip, port));
+    private synchronized void sendMsgInternal(byte[] msg, InetSocketAddress socketAddress) {
+        DatagramPacket packet = new DatagramPacket(msg, msg.length,socketAddress);
         try {
             datagramSocket.send(packet);
         } catch (IOException e) {
@@ -233,6 +350,23 @@ public class DatagramSocketCommunication extends Communication {
 
     public short getClientID() {
         return clientID;
+    }
+
+    /**
+     * remote a connection
+     */
+    private void removeConnection(short remoteID) {
+        Connection connection = connections.remove(remoteID);
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        peerSet.remove(remoteID);
+        //TODO notify program?
+        //TODO remove from other peers?
     }
 
     public static void writeInt(byte[] msg, int offset, int val) {
@@ -275,6 +409,19 @@ public class DatagramSocketCommunication extends Communication {
         return ((msg[2] & flag) & 0xFF) != 0;
     }
 
+    /**
+     * create a system message which is reliable, has set the id as first short and has set protocol and client id
+     */
+    private byte[] getSystemMsg(short id, int dataLength) {
+        byte[] msg = new byte[HEADER_SIZE + 4 + dataLength];
+        setFlag(msg, IS_RELIABLE, true);
+        setFlag(msg, IS_SYSTEM, true);
+        writeShort(msg, 0, PROTOCOL_ID);
+        writeShort(msg, 3, clientID);
+        writeShort(msg, HEADER_SIZE, id);
+        return msg;
+    }
+
     static void printMsg(byte[] msg) {
         System.out.printf("protocol id: %d%n", readShort(msg, 0));
         System.out.printf("client id: %d%n", readShort(msg, 3));
@@ -289,13 +436,17 @@ public class DatagramSocketCommunication extends Communication {
                 Integer.toBinaryString(readInt(msg, 17))).replace(' ', '0'));
     }
 
-    private class Connection extends Thread {
-        private short remoteID;
+    private class Connection extends Thread implements Closeable {
+        private short remoteID = -1;
 
-        private String remoteIP;
-        private int remotePort;
+        private InetSocketAddress socketAdress;
 
         private volatile boolean connected = false;
+
+        /**
+         * shows if a connection handles messages on its own or uses a client server model
+         * if it is indirect, the Connection loses basically oll its important features, like ack, sequence and sequenceAck
+         */
         private volatile boolean isIndirect = false;
 
         //calculates the amount of newer packages and requests a resend if this exceeded 5
@@ -351,11 +502,48 @@ public class DatagramSocketCommunication extends Communication {
 
         private long lastResendTimestamp;
 
-        public Connection(String remoteIP, int remotePort) {
-            this.remoteIP = remoteIP;
-            this.remotePort = remotePort;
+        private int timeoutCounter = 0;
+
+        /**
+         * default constructor with well known id
+         */
+        public Connection(InetSocketAddress socketAddress, short remoteID) {
+            this(socketAddress);
+            setRemoteID(remoteID);
+        }
+
+        /**
+         * Constructor with no id
+         */
+        public Connection(InetSocketAddress socketAddress) {
+            this.socketAdress = socketAddress;
             this.lastResendTimestamp = System.currentTimeMillis();
         }
+
+        /**
+         * starts the thread, and connects
+         */
+        public void startAndConnect() {
+            start();
+            connect();
+        }
+
+        /**
+         * starts the thread and acks the connection
+         * @param msgs should only be reliable messages
+         */
+        public void startAndAcknowledge(boolean indirect, byte[]... msgs) {
+            this.isIndirect = indirect;
+            this.connected = true;
+            start();
+            byte[] ackConnectionMsg = getSystemMsg(ACK_OPEN_CONNECTION, 2);
+            writeShort(ackConnectionMsg, HEADER_SIZE + 2, remoteID);
+            send(ackConnectionMsg);
+            for (byte[] msg : msgs) {
+                send(msg);
+            }
+        }
+
 
         /**
          * start the connecting process
@@ -379,9 +567,10 @@ public class DatagramSocketCommunication extends Communication {
                     if (!connected) {
                         if (remoteID == 0) {
                             System.out.println("failed to connect to server");
+                            throw new IllegalStateException();
                         } else {
                             System.out.println("failed to connect, set to indirect");
-                            isIndirect = true;
+                            activateIndirect();
                         }
                     }
                 }
@@ -393,8 +582,11 @@ public class DatagramSocketCommunication extends Communication {
          * called internally
          */
         private void connectInternal() {
-            //TODO implementation
-            
+            if (!connected) {
+                byte[] msg = getSystemMsg(OPEN_CONNECTION, 0);
+                setFlag(msg, IS_RELIABLE, false);
+                sendInternal(msg);
+            }
         }
 
         /**
@@ -451,9 +643,22 @@ public class DatagramSocketCommunication extends Communication {
                 writeInt(msg, 9, sequence);
                 writeInt(msg, 13, ack);
                 writeInt(msg, 17, ackField);
-                sequence++;
+                if (readFlag(msg, IS_RELIABLE)) sequence++;
                 sentMessagesBuffer.addLast(msg);
-                sendMsgInternal(msg, remoteIP, remotePort);
+                sendMsgInternal(msg, socketAdress);
+            }
+        }
+
+        /**
+         * receive a message
+         * @param msg
+         */
+        public void receive(byte[] msg) {
+            try {
+                this.receiveQueue.put(msg);
+            } catch (InterruptedException e) {
+                System.err.println("unable to put message");
+                e.printStackTrace();
             }
         }
 
@@ -461,6 +666,7 @@ public class DatagramSocketCommunication extends Communication {
          * handles a raw received message byte array
          */
         private void receiveInternal(byte[] msg) {
+            timeoutCounter = 0;
             handleSequenceAckAndResend(msg);
             if (readFlag(msg, IS_RELIABLE)) {
                 handleReliableMessage(msg);
@@ -606,7 +812,7 @@ public class DatagramSocketCommunication extends Communication {
         }
 
         /**
-         * handles a complete received message, and adds it to receivedTransmissions or handles it internal
+         * handles a complete received message
          */
         private void handleReceivedMessage(byte[] msg, int offset) {
             ByteArrayInputStream inputStream = new ByteArrayInputStream(msg);
@@ -614,25 +820,77 @@ public class DatagramSocketCommunication extends Communication {
             inputStream.mark(0);
             if (skipped != offset) System.out.println("error: could not skip enough: " + skipped);
             DataInputStream dataInputStream = new DataInputStream(inputStream);
-            if (readFlag(msg, IS_SYSTEM)) {
-                handleSystemMessage(dataInputStream);
+
+            //send it if necessary to the correct connection
+            boolean isSystem = readFlag(msg, IS_SYSTEM);
+            if (readFlag(msg, IS_INDIRECT)) {
+                Connection indirectConnection = connections.get(readShort(msg, 5));
+                if (indirectConnection != null) {
+                    indirectConnection.handleMessage(dataInputStream, isSystem);
+                } else {
+                    System.err.println("could not transmit to correct indirect connection");
+                    printMsg(msg);
+                }
+            } else {
+                handleMessage(dataInputStream, isSystem);
+            }
+        }
+
+        /**
+         * adds a message to receivedTransmissions or handles it internal
+         * @param inputStream
+         */
+        void handleMessage(DataInputStream inputStream, boolean isSystem) {
+            if (isSystem) {
+                handleSystemMessage(inputStream);
             } else {
                 //add it directly to the output queue
-                receivedTransmissions.add(dataInputStream);
+                receivedTransmissions.add(inputStream);
             }
+        }
+
+        /**
+         * a timeout has occured, requests a resend if necessary and goes indirect if possible,
+         * else it shuts down
+         */
+        private void timeout() {
+            System.out.println("TIMEOUT WARNING");
+            timeoutCounter++;
+            if (timeoutCounter > 8) {
+                if (isIndirect) {
+                    System.err.println("too many timeouts even if indirect, shutdown: " + remoteID);
+                    removeConnection(remoteID);
+                } else {
+                    //set to indirect as a last try
+                    timeoutCounter = 0;
+                    activateIndirect();
+                }
+            }
+            if (connected) {
+                byte[] timeoutMsg = getSystemMsg(TIMEOUT_WARNING, 0);
+                send(timeoutMsg);
+                resend();
+            }
+        }
+
+        private void activateIndirect() {
+            isIndirect = true;
+            byte[] indirectMsg = getSystemMsg(SET_INDIRECT, 0);
+            send(indirectMsg);
         }
 
         /**
          * resend the messages that are not acknowledged
          */
         private void resend() {
-            if (System.currentTimeMillis() - lastResendTimestamp > MIN_RESEND_TIMEOUT) {
+            if (System.currentTimeMillis() - lastResendTimestamp > RESEND_TIMEOUT) {
+                System.out.println("RESEND");
                 int index = 0;
                 Iterator<byte[]> iter = sentMessagesBuffer.iterator();
                 while (index < 32 && iter.hasNext()) {
                     byte[] msg = iter.next();
                     if ((sequenceAckField & (1 << index)) != 0) {
-                        sendMsgInternal(msg, remoteIP, remotePort);
+                        sendMsgInternal(msg, socketAdress);
                     }
                     index++;
                 }
@@ -657,7 +915,7 @@ public class DatagramSocketCommunication extends Communication {
                 } catch (InterruptedException e) {
                     System.out.println("did not receive anything: " + remoteID);
                     System.out.println("resend from timeout");
-                    resend();
+                    timeout();
                 }
             }
         }
@@ -666,5 +924,25 @@ public class DatagramSocketCommunication extends Communication {
             return remoteID;
         }
 
+        private void setRemoteID(short remoteID) {
+            if (this.remoteID != remoteID) {
+                if (connections.containsKey(this.remoteID)) {
+                    System.out.println("previous peer id: " + this.remoteID);
+                    System.out.println("HAVE TO REMOVE CONNECTION: NEW ID");
+                    connections.remove(this.remoteID);
+                }
+                peerSet.remove(this.remoteID);
+
+                this.remoteID = remoteID;
+
+                peerSet.add(remoteID);
+                connections.put(remoteID, this);
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            shutdown = true;
+        }
     }
 }
