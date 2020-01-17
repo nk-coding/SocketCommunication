@@ -1,6 +1,5 @@
 package com.nkcoding.communication;
 
-import javax.management.remote.rmi.RMIServerImpl_Stub;
 import java.io.*;
 import java.net.*;
 import java.util.*;
@@ -34,7 +33,7 @@ public class DatagramSocketCommunication extends Communication {
     private static final short ACK_OPEN_CONNECTION = 2;
     /**
      * sends a timeout warning, also used to update
-     * 0 arguments
+     * short: clientID
      */
     private static final short TIMEOUT_WARNING = 3;
     /**
@@ -68,7 +67,7 @@ public class DatagramSocketCommunication extends Communication {
     /**
      * the id for this client
      */
-    private short clientID;
+    private short clientID = -1;
 
     /**
      * is this the server?
@@ -161,7 +160,11 @@ public class DatagramSocketCommunication extends Communication {
     @Override
     public void openCommunication(String ip, int port) {
         InetSocketAddress address = new InetSocketAddress(ip, port);
-        Connection connection = new Connection(address, (short) 0);
+        openConnection(address, 0);
+    }
+
+    private void openConnection(InetSocketAddress address, int remoteID) {
+        Connection connection = new Connection(address, (short)remoteID);
         connection.startAndConnect();
     }
 
@@ -931,13 +934,6 @@ public class DatagramSocketCommunication extends Communication {
             }
         }
 
-        /**
-         * handles a system message
-         */
-        private void handleSystemMessage(DataInputStream inputStream) {
-            //TODO
-        }
-
         @Override
         public void run() {
             super.run();
@@ -976,6 +972,77 @@ public class DatagramSocketCommunication extends Communication {
         @Override
         public void close() {
             shutdown = true;
+        }
+
+        /**
+         * handles a system message
+         */
+        private void handleSystemMessage(DataInputStream inputStream) {
+            try {
+                short msgID = inputStream.readShort();
+                switch (msgID) {
+                    case OPEN_CONNECTION:
+                        //if this message comes in, just ignore for this time
+                        System.err.println("received open message, ignore");
+                        break;
+                    case ACK_OPEN_CONNECTION:
+                        short newClientID = inputStream.readShort();
+                        if (newClientID != -1) {
+                            if (newClientID == clientID) {
+                                System.out.println("received same clientID, do nothing");
+                            } else {
+                                if (clientID == -1) {
+                                    System.out.println("updated clientID");
+                                    setClientID(newClientID);
+                                } else {
+                                    System.err.println("try to overwrite clientID");
+                                }
+                            }
+                        }
+                        break;
+                    case TIMEOUT_WARNING:
+                        System.out.println("TIMEOUT WARNING");
+                        byte[] timeoutWarningAck = getSystemMsg(ACK_TIMEOUT_WARNING, 0);
+                        send(timeoutWarningAck);
+                        break;
+                    case ACK_TIMEOUT_WARNING:
+                        System.out.println("Acked timout warning");
+                        //do nothing, it fullfilled already its reason
+                        break;
+                    case SET_INDIRECT:
+                        System.out.println("SET INDIRECT");
+                        //this also sends the msg
+                        activateIndirect(false);
+                        break;
+                    case ADD_PEERS:
+                        System.out.println("add peers");
+                        short amountPeers = inputStream.readShort();
+                        for (int i = 0; i < amountPeers; i++) {
+                            short id = inputStream.readShort();
+                            short addressLength = inputStream.readShort();
+                            byte[] address = inputStream.readNBytes(addressLength);
+                            int port = inputStream.readInt();
+                            InetSocketAddress newSocketAddress = new InetSocketAddress(InetAddress.getByAddress(address), port);
+                            openConnection(newSocketAddress, id);
+                        }
+                        break;
+                    case REDIRECT_UNSENT_MSG:
+                        System.out.println();
+                        short amountMsgs = inputStream.readShort();
+                        for (int i = 0; i < amountMsgs; i++) {
+                            short msgLength = inputStream.readShort();
+                            byte[] msg = inputStream.readNBytes(msgLength);
+                            //receive this message the normal way
+                            receiveInternal(msg);
+                        }
+                        break;
+                    default:
+                        System.err.println("unrecognized system msg: " + msgID);
+                        throw new IllegalStateException();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 }
