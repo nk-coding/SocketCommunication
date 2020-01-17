@@ -34,6 +34,11 @@ public class DatagramSocketCommunication extends Communication {
      */
     private static final short ACK_OPEN_CONNECTION = 2;
     /**
+     * acks the ack for the open connection
+     * 0 arguments (right now)
+     */
+    private static final short ACK_ACK_OPEN_CONNECTION = 10;
+    /**
      * sends a timeout warning, also used to update
      * short: clientID
      */
@@ -279,7 +284,7 @@ public class DatagramSocketCommunication extends Communication {
      */
     private void handleMsg(byte[] msg, DatagramPacket source) {
         if (doDebug) System.out.println("---------------receive MESSAGE-----------------");
-        printMsg(msg);
+        if (doDebug) printMsg(msg);
 
         //redirect if necessary
         boolean isIndirect = readFlag(msg, IS_INDIRECT);
@@ -319,14 +324,16 @@ public class DatagramSocketCommunication extends Communication {
                     writeShort(peersMsg, HEADER_SIZE + 2, connectionCount);
                     dataOutputStream.close();
                     //send with the additional init message
+                    System.out.println("start from server");
                     connection.startAndAcknowledge(false, peersMsg);
                 } catch (IOException e) {
                     throw new IllegalStateException(e);
                 }
 
             } else {
+                System.out.println("start from client");
                 Connection connection = new Connection(socketAddress, readShort(msg, HEADER_SIZE + 2));
-                connection.startAndAcknowledge(false);
+                connection.startAndAcknowledge(false); //TODO ask for id
             }
         } else {
             short remoteID = readShort(msg, 3);
@@ -338,10 +345,11 @@ public class DatagramSocketCommunication extends Communication {
                     if (doDebug) System.out.println("create new client via indirect");
                     InetSocketAddress socketAddress = (InetSocketAddress)source.getSocketAddress();
                     Connection newIndirectConnection = new Connection(socketAddress, remoteID);
+                    System.out.println("start from indirect");
                     newIndirectConnection.startAndAcknowledge(true);
                 } else {
                     if (doDebug) System.err.println("CANNOT RECEIVE MSG");
-                    printMsg(msg);
+                    if (doDebug) printMsg(msg);
                 }
             }
         }
@@ -430,54 +438,57 @@ public class DatagramSocketCommunication extends Communication {
     }
 
     static void printMsg(byte[] msg) {
-        if (doDebug) System.out.println("message:");
-        if (doDebug) System.out.printf("protocol id: %d%n", readShort(msg, 0));
-        if (doDebug) System.out.printf("client id: %d%n", readShort(msg, 3));
-        if (doDebug) System.out.printf("sys=%b reliable=%b partial=%b indirect=%b open=%b%n",
+        System.out.println("message:");
+        System.out.printf("protocol id: %d%n", readShort(msg, 0));
+        System.out.printf("client id: %d%n", readShort(msg, 3));
+        System.out.printf("sys=%b reliable=%b partial=%b indirect=%b open=%b%n",
                 readFlag(msg, IS_SYSTEM), readFlag(msg, IS_RELIABLE), readFlag(msg, IS_PARTIAL),
                 readFlag(msg, IS_INDIRECT), readFlag(msg, IS_OPEN_CONNECTION));
-        if (doDebug) System.out.printf("indirect target: %d%n", readShort(msg, 5));
-        if (doDebug) System.out.printf("amount parts: %d%n", readShort(msg, 7));
-        if (doDebug) System.out.printf("sequence: %d%n", readInt(msg, 9));
-        if (doDebug) System.out.printf("ack: %d%n", readInt(msg, 13));
-        if (doDebug) System.out.printf("ack field: %s%n", String.format("%16s",
+        System.out.printf("indirect target: %d%n", readShort(msg, 5));
+        System.out.printf("amount parts: %d%n", readShort(msg, 7));
+        System.out.printf("sequence: %d%n", readInt(msg, 9));
+        System.out.printf("ack: %d%n", readInt(msg, 13));
+        System.out.printf("ack field: %s%n", String.format("%16s",
                 Integer.toBinaryString(readInt(msg, 17))).replace(' ', '0'));
         if (msg.length >= HEADER_SIZE + 2) {
             switch (readShort(msg, HEADER_SIZE)) {
                 case OPEN_CONNECTION:
-                    if (doDebug) System.out.println("supposed type: OPEN_CONNECTION");
+                    System.out.println("supposed type: OPEN_CONNECTION");
                     break;
                 case ACK_OPEN_CONNECTION:
-                    if (doDebug) System.out.println("supposed type: ACK_OPEN_CONNECTION");
+                    System.out.println("supposed type: ACK_OPEN_CONNECTION");
+                    break;
+                case ACK_ACK_OPEN_CONNECTION:
+                    System.out.println("supposed type: ACK_ACK_OPEN_CONNECTION");
                     break;
                 case TIMEOUT_WARNING:
-                    if (doDebug) System.out.println("supposed type: TIMEOUT_WARNING");
+                    System.out.println("supposed type: TIMEOUT_WARNING");
                     break;
                 case ACK_TIMEOUT_WARNING:
-                    if (doDebug) System.out.println("supposed type: ACK_TIMEOUT_WARNING");
+                    System.out.println("supposed type: ACK_TIMEOUT_WARNING");
                     break;
                 case SET_INDIRECT:
-                    if (doDebug) System.out.println("supposed type: SET_INDIRECT");
+                    System.out.println("supposed type: SET_INDIRECT");
                     break;
                 case ADD_PEERS:
-                    if (doDebug) System.out.println("supposed type: ADD_PEERS");
+                    System.out.println("supposed type: ADD_PEERS");
                     break;
                 case REDIRECT_UNSENT_MSG:
-                    if (doDebug) System.out.println("supposed type: REDIRECT_UNSENT_MSG");
+                    System.out.println("supposed type: REDIRECT_UNSENT_MSG");
                     break;
                 default:
-                    if (doDebug) System.out.println("cannot recognize type");
+                    System.out.println("cannot recognize type");
             }
         }
-        if (doDebug) System.out.print("-------------------------------------");
+        System.out.print("-------------------------------------");
         for (int i = HEADER_SIZE; i < msg.length; i++) {
             if ((i - HEADER_SIZE) % 4 == 0) {
-                if (doDebug) System.out.println();
+                System.out.println();
             }
-            if (doDebug) System.out.print(String.format("%2x", msg[i] & 0xFF).replace(' ', '0') + ' ');
+            System.out.print(String.format("%2x", msg[i] & 0xFF).replace(' ', '0') + ' ');
         }
-        if (doDebug) System.out.println();
-        if (doDebug) System.out.println("-------------------------------------");
+        System.out.println();
+        System.out.println("-------------------------------------");
     }
 
     private class Connection extends Thread implements Closeable {
@@ -589,7 +600,6 @@ public class DatagramSocketCommunication extends Communication {
             for (byte[] msg : msgs) {
                 send(msg);
             }
-            makePublic();
         }
 
 
@@ -602,7 +612,8 @@ public class DatagramSocketCommunication extends Communication {
                 public void run() {
                     super.run();
                     for (int i = 0; i < 5; i++) {
-                        if (!connected || true) {
+                        if (!connected) {
+                            System.out.println("connect");
                             connectInternal();
                         }
                         try {
@@ -693,8 +704,11 @@ public class DatagramSocketCommunication extends Communication {
                 writeInt(msg, 9, sequence);
                 writeInt(msg, 13, ack);
                 writeInt(msg, 17, ackField);
-                if (readFlag(msg, IS_RELIABLE)) sequence++;
-                sentMessagesBuffer.addLast(msg);
+                if (readFlag(msg, IS_RELIABLE)) {
+                    sequence++;
+                    sentMessagesBuffer.addLast(msg);
+                }
+
                 sendMsgInternal(msg, socketAdress);
             }
         }
@@ -724,7 +738,7 @@ public class DatagramSocketCommunication extends Communication {
                     indirectConnection.handleMessage(msg, readFlag(msg, IS_SYSTEM));
                 } else {
                     if (doDebug) System.err.println("could not transmit to correct indirect connection");
-                    printMsg(msg);
+                    if (doDebug) printMsg(msg);
                 }
             }
             handleSequenceAckAndResend(msg);
@@ -886,7 +900,7 @@ public class DatagramSocketCommunication extends Communication {
                     indirectConnection.receive(msg);
                 } else {
                     if (doDebug) System.err.println("could not transmit to correct indirect connection");
-                    printMsg(msg);
+                    if (doDebug) printMsg(msg);
                 }
             }
 
@@ -1064,10 +1078,17 @@ public class DatagramSocketCommunication extends Communication {
                                     if (doDebug) System.out.println("updated clientID");
                                     setClientID(newClientID);
                                 } else {
-                                    if (doDebug) System.err.println("try to overwrite clientID");
+                                    System.err.println("try to overwrite clientID");
                                 }
                             }
                         }
+                        byte[] ackMsg = getSystemMsg(ACK_ACK_OPEN_CONNECTION, 0);
+                        send(ackMsg);
+                        makePublic();
+                        break;
+                    case ACK_ACK_OPEN_CONNECTION:
+                        //make it public
+                        //nothing else to do right now
                         makePublic();
                         break;
                     case TIMEOUT_WARNING:
