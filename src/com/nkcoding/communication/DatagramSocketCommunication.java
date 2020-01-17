@@ -358,10 +358,6 @@ public class DatagramSocketCommunication extends Communication {
         writeShort(unreliableHeader, 3, clientID);
     }
 
-    public short getClientID() {
-        return clientID;
-    }
-
     /**
      * remote a connection
      */
@@ -642,7 +638,7 @@ public class DatagramSocketCommunication extends Communication {
                 setFlag(msg, IS_INDIRECT, true);
                 writeShort(msg, 5, remoteID);
                 //send via server
-                connections.get(0).sendInternal(msg);
+                connections.get((short)0).sendInternal(msg);
             } else {
                 setFlag(msg, REQUEST_RESEND, resendRequestCounter > 3);
                 writeShort(msg, 3, remoteID);
@@ -657,7 +653,6 @@ public class DatagramSocketCommunication extends Communication {
 
         /**
          * receive a message
-         * @param msg
          */
         public void receive(byte[] msg) {
             try {
