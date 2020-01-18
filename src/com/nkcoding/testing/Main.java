@@ -28,6 +28,7 @@ public class Main {
             startAsServer = false;
             System.out.println("enter remote ip");
             remoteIP = in.nextLine();
+            if (remoteIP.isBlank()) remoteIP = "localhost";
             System.out.println("enter remote port");
             remotePort = in.nextInt();
         }
