@@ -54,6 +54,11 @@ public class DatagramSocketCommunication extends Communication {
      * short amount
      * (short id, short addressLength, byte[addressLength] address, int port)[length]
      */
+    /**
+     * requests a list of peers to connect to
+     * 0 arguments
+     */
+    private static final short REQUEST_PEERS = 11;
     private static final short ADD_PEERS = 7;
     /**
      * sends all (possibly) unsent messages via redirection
@@ -360,12 +365,6 @@ public class DatagramSocketCommunication extends Communication {
         if (Math.random() < 0.5) {
             return;
         }
-        if (msg.length >= HEADER_SIZE + 2) {
-            short id = readShort(msg, HEADER_SIZE);
-            if (readInt(msg, 17) != 0) {
-                System.out.println("ackField: " + readInt(msg, 17));
-            }
-        }
         //endregion
 
         if (readShort(msg, 0) != PROTOCOL_ID) {
@@ -398,42 +397,45 @@ public class DatagramSocketCommunication extends Communication {
 
         Connection connection;
         if (isServer) {
-            try {
-                idCounter++;
-                connection = new Connection(socketAddress, idCounter);
-                ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-                DataOutputStream dataOutputStream = new DataOutputStream(outputStream);
-                byte[] headerAndID = getSystemMsg(ADD_PEERS, 2);
-                dataOutputStream.write(headerAndID);
-                short connectionCount = 0;
-                for (Connection connectTo : connections.values()) {
-                    if (connectTo.remoteID != idCounter) {
-                        connectionCount++;
-                        dataOutputStream.writeShort(connectTo.getRemoteID());
-                        byte[] address = connectTo.socketAdress.getAddress().getAddress();
-                        dataOutputStream.writeShort(address.length);
-                        dataOutputStream.write(address);
-                        dataOutputStream.writeInt(connectTo.socketAdress.getPort());
-                    }
-                }
-                dataOutputStream.flush();
-                byte[] peersMsg = outputStream.toByteArray();
-                writeShort(peersMsg, HEADER_SIZE + 2, connectionCount);
-                dataOutputStream.close();
-                //send with the additional init message
-                System.out.println("start from server");
-                connection.startAndAcknowledge(false, peersMsg);
-            } catch (IOException e) {
-                throw new IllegalStateException(e);
-            }
-
+            idCounter++;
+            connection = new Connection(socketAddress, idCounter);
+            //send with the additional init message
+            System.out.println("start from server");
         } else {
             System.out.println("start from client");
             connection = new Connection(socketAddress, readShort(msg, HEADER_SIZE + 2));
-            connection.startAndAcknowledge(false);
         }
+        connection.startAndAcknowledge(false);
         //receive the msg because this is now necessary because it is reliable
         connection.receive(msg);
+    }
+
+    private byte[] getPeerData(int own) {
+        try {
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            DataOutputStream dataOutputStream = new DataOutputStream(outputStream);
+            dataOutputStream.writeShort(0); //placeholder
+            short connectionCount = 0;
+            for (Short remoteID : peerSet) {
+                Connection connectTo = connections.get(remoteID);
+                if (connectTo.remoteID != own && connectTo.isConnected) {
+                    connectionCount++;
+                    dataOutputStream.writeShort(connectTo.getRemoteID());
+                    byte[] address = connectTo.socketAdress.getAddress().getAddress();
+                    dataOutputStream.writeShort(address.length);
+                    dataOutputStream.write(address);
+                    dataOutputStream.writeInt(connectTo.socketAdress.getPort());
+                }
+            }
+            dataOutputStream.flush();
+            byte[] peersMsg = outputStream.toByteArray();
+            writeShort(peersMsg, 0, connectionCount);
+            dataOutputStream.close();
+            return peersMsg;
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new IllegalStateException();
+        }
     }
 
     private synchronized void sendMsgInternal(byte[] msg, InetSocketAddress socketAddress) {
@@ -517,7 +519,7 @@ public class DatagramSocketCommunication extends Communication {
          */
         private int sequenceAck = 0;
 
-        private int sequenceAckField = 0xFFFFFFFF;
+        private int sequenceAckField = 0;
 
         private volatile boolean shutdown = false;
 
@@ -604,8 +606,6 @@ public class DatagramSocketCommunication extends Communication {
          */
         private synchronized void send(byte[] msg) {
             if (readFlag(msg, IS_RELIABLE) && msg.length > MAX_SIZE) {
-                System.out.println("the long message:");
-                printMsg(msg);
                 int contentSize = MAX_SIZE - HEADER_SIZE;
                 int parts = (int) Math.ceil((msg.length - HEADER_SIZE) / (float) (contentSize));
                 for (int i = 0; i < parts - 1; i++) {
@@ -672,9 +672,6 @@ public class DatagramSocketCommunication extends Communication {
                 writeInt(msg, 9, sequence);
                 writeInt(msg, 13, ack);
                 writeInt(msg, 17, ackField);
-                if (ackField != 0) {
-                    System.out.println("different ackField to send: " + ackField);
-                }
                 if (readFlag(msg, IS_RELIABLE)) {
                     sequence++;
                     sentMessagesBuffer.addLast(msg);
@@ -736,26 +733,29 @@ public class DatagramSocketCommunication extends Communication {
 
         private synchronized void handleSequenceAckAndResend(byte[] msg) {
             //new sequenceAck
-            int acknowledged = readInt(msg, 13);
+            int newSequenceAck = readInt(msg, 13);
             //new sequence
             int seq = readInt(msg, 9);
             boolean resend = false;
             //check if the packet is new enough to do all this stuff
-            if (acknowledged >= sequenceAck) {
+            if (newSequenceAck >= sequenceAck) {
                 //reset the counter, because a new reliable msg was registered, so a request would happen on its own
                 if (seq > ack && readFlag(msg, IS_RELIABLE)) {
                     resendRequestCounter = 0;
                 }
                 //update sequenceAck, sequenceAckField and the sentMessagesBuffer
-                sequenceAckField >>>= (acknowledged - sequenceAck);
+                if (newSequenceAck - sequenceAck < 32) {
+                    sequenceAckField >>>= (newSequenceAck - sequenceAck);
+                } else {
+                    sequenceAckField = 0;
+                }
                 //System.out.println("acknowledged: " + acknowledged + " sequenceAck: " + sequenceAck);
-                for (int i = 0; i < acknowledged - sequenceAck; i++) {
+                for (int i = 0; i < newSequenceAck - sequenceAck; i++) {
                     //these messages are proven sent, so remove these
-                    if (doDebug) System.out.println("REMOVED acked message");
                     sentMessagesBuffer.removeFirst();
                 }
-                sequenceAckField |= readInt(msg, 17);
-                sequenceAck = acknowledged;
+                sequenceAckField = readInt(msg, 17);
+                sequenceAck = newSequenceAck;
                 //find the newest acknowledged and resend all older
                 for (int i = 31; i > 0; i--) {
                     //check if the bit is set
@@ -763,7 +763,7 @@ public class DatagramSocketCommunication extends Communication {
                         //check if all previous were send, if not resend
                         int mask = ((1 << i) - 1);
                         if ((mask & sequenceAckField) != mask) {
-                            if (doDebug) System.out.println("resend from mask");
+                            System.out.println("resend from mask");
                             resend = true;
                         }
                         break;
@@ -790,8 +790,8 @@ public class DatagramSocketCommunication extends Communication {
                 return;
             }
             //ensure the capacity
-            if (msgSequence - messageBufferOffset > reliableMessageBuffer.size()) {
-                for (int i = 0; i < reliableMessageBuffer.size() - msgSequence + messageBufferOffset; i++) {
+            if (msgSequence - messageBufferOffset >= reliableMessageBuffer.size()) {
+                for (int i = reliableMessageBuffer.size(); i <= msgSequence + messageBufferOffset + 1; i++) {
                     reliableMessageBuffer.addLast(null);
                 }
             }
@@ -799,11 +799,13 @@ public class DatagramSocketCommunication extends Communication {
             //add it to the buffer
             reliableMessageBuffer.set(msgSequence - messageBufferOffset, msg);
             //check if it has to be handled by updateAcknowledged
-            if ((msgSequence - messageBufferOffset) < 32) {
-                ackField |= (1 << (msgSequence - messageBufferOffset));
-                //System.out.println("ack field at this time: " + ackField);
+            //these values have two different meanings
+            //DONT DO THIS EVER AGAIN NIKLAS
+            if ((msgSequence - ack) < 32) {
+                ackField |= (1 << (msgSequence - ack));
                 tryReceiveReliableMessage();
             }
+
         }
 
         /**
@@ -839,11 +841,15 @@ public class DatagramSocketCommunication extends Communication {
                     //the amount for the ack update
                     int ackAmount = readInt(lastContinuouslyReceived, 9) + 1 - ack;
                     ack += ackAmount;
+                    if (ackAmount < 32) {
+                        ackField >>>= ackAmount;
+                    } else {
+                        ackField = 0;
+                    }
 
-                    ackField >>>= ackAmount;
-                    int index = 32 - ackAmount;
-                    if (index < reliableMessageBuffer.size()) {
-                        ListIterator<byte[]> listIterator = reliableMessageBuffer.listIterator(32);
+                    int index = 0;
+                    if (ack - messageBufferOffset < reliableMessageBuffer.size()) {
+                        ListIterator<byte[]> listIterator = reliableMessageBuffer.listIterator(ack - messageBufferOffset);
                         while (index < 32 && listIterator.hasNext()) {
                             byte[] bytes = listIterator.next();
                             if (index >= 0 && bytes != null) {
@@ -870,8 +876,6 @@ public class DatagramSocketCommunication extends Communication {
                             newPos += length;
                             reliableMessageBuffer.addLast(null);
                         }
-                        System.out.println("received very long msg:");
-                        printMsg(msg);
                         handleReceivedMessage(msg);
                     }
                     //update offset
@@ -991,12 +995,11 @@ public class DatagramSocketCommunication extends Communication {
             if (!isIndirect) {
                 if (isConnected) {
                     if (System.currentTimeMillis() - lastResendTimestamp > RESEND_TIMEOUT) {
-                        if (doDebug) System.out.println("RESEND");
                         int index = 0;
                         Iterator<byte[]> iter = sentMessagesBuffer.iterator();
                         while (index < 32 && iter.hasNext()) {
                             byte[] msg = iter.next();
-                            if ((sequenceAckField & (1 << index)) != 0) {
+                            if ((sequenceAckField & (1 << index)) == 0) {
                                 sendMsgInternal(msg, socketAdress);
                             }
                             index++;
@@ -1075,18 +1078,20 @@ public class DatagramSocketCommunication extends Communication {
                 switch (msgID) {
                     case OPEN_CONNECTION:
                         //if this message comes in, just ignore for this time
-                        if (doDebug) System.out.println("received open message, ignore");
+                        System.out.println("received open message, ignore");
                         break;
                     case ACK_OPEN_CONNECTION:
                         short newClientID = inputStream.readShort();
                         isConnected = true;
                         if (newClientID != -1) {
                             if (newClientID == clientID) {
-                                if (doDebug) System.out.println("received same clientID, do nothing");
+                                System.out.println("error: received same clientID");
                             } else {
                                 if (clientID == -1) {
-                                    if (doDebug) System.out.println("updated clientID");
+                                    //send request peers
                                     setClientID(newClientID);
+                                    byte[] requestPeersMsg = getSystemMsg(REQUEST_PEERS, 0);
+                                    send(requestPeersMsg);
                                 } else {
                                     System.out.println("try to overwrite clientID");
                                 }
@@ -1115,6 +1120,13 @@ public class DatagramSocketCommunication extends Communication {
                         System.out.println("SET INDIRECT");
                         //this also sends the msg
                         activateIndirect(false);
+                        break;
+                    case REQUEST_PEERS:
+                        System.err.println("resquest peers");
+                        byte[] peerData = getPeerData(remoteID);
+                        byte[] peerMsg = getSystemMsg(ADD_PEERS, peerData.length);
+                        System.arraycopy(peerData, 0, peerMsg, HEADER_SIZE + 2, peerData.length);
+                        send(peerMsg);
                         break;
                     case ADD_PEERS:
                         if (doDebug) System.out.println("add peers");
