@@ -513,6 +513,10 @@ public class DatagramSocketCommunication extends Communication {
          * initial message that is resend even if it is not connected
          */
         private byte[] initialMsg = null;
+        /**
+         * list with unsent indirect messages because the connection was not initialised
+         */
+        private List<byte[]> unsentIndirectMsgs = new ArrayList<>();
 
         /**
          * shows if a connection handles messages on its own or uses a client server model
@@ -662,6 +666,9 @@ public class DatagramSocketCommunication extends Communication {
             prepareMsgToSend(msg);
             if (isConnected) {
                 sendFinal(msg);
+            } else if (readFlag(msg, IS_INDIRECT)) {
+                System.out.println("add unsent indirect msg");
+                unsentIndirectMsgs.add(msg);
             }
         }
 
@@ -732,12 +739,7 @@ public class DatagramSocketCommunication extends Communication {
             timeoutCounter = 0;
             //only check for correct indirect message if not received from server
             if (remoteID != 0 && readFlag(msg, IS_INDIRECT) && !isServer()) {
-                Connection indirectConnection = connections.get(readShort(msg, 5));
-                if (indirectConnection != null) {
-                    indirectConnection.handleMessage(msg, readFlag(msg, IS_SYSTEM));
-                } else {
-                    System.out.println("could not transmit to correct indirect connection");
-                }
+                handleMessage(msg, readFlag(msg, IS_SYSTEM));
             } else {
                 handleSequenceAckAndResend(msg);
                 if (readFlag(msg, IS_RELIABLE)) {
@@ -969,7 +971,7 @@ public class DatagramSocketCommunication extends Communication {
                 } else {
                     //set to indirect as a last try
                     timeoutCounter = 0;
-                    if (!isConnected && initialMsg != null && clientID != 0 && remoteID != 0) {
+                    if (!isConnected && initialMsg != null && !isServer && remoteID != 0) {
                         System.out.println("unconnected timeout, send initialMsg");
                         //make indirect because this is necessary for the send to function correctly
                         isIndirect = true;
@@ -997,7 +999,7 @@ public class DatagramSocketCommunication extends Communication {
                     byte[] indirectMsg = getSystemMsg(SET_INDIRECT, 0);
                     send(indirectMsg);
                 }
-                //send all the unsent messages
+                //send all the unsent (direct) messages
                 try {
                     byte[] headerAndID = getSystemMsg(REDIRECT_UNSENT_MSG, 0);
                     ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
@@ -1092,6 +1094,15 @@ public class DatagramSocketCommunication extends Communication {
             peerSet.add(remoteID);
         }
 
+        private void connect() {
+            isConnected = true;
+
+            //send all unsent indirect messages
+            for (byte[] unsentMsg : unsentIndirectMsgs) {
+                send(unsentMsg);
+            }
+        }
+
         @Override
         public void close() {
             shutdown = true;
@@ -1110,10 +1121,10 @@ public class DatagramSocketCommunication extends Communication {
                         break;
                     case ACK_OPEN_CONNECTION:
                         short newClientID = inputStream.readShort();
-                        isConnected = true;
+                        connect();
                         if (newClientID != -1) {
                             if (newClientID == clientID) {
-                                System.out.println("error: received same clientID");
+                                System.out.println("received ack_open_connection from other client");
                             } else {
                                 if (clientID == -1) {
                                     //send request peers
@@ -1131,7 +1142,7 @@ public class DatagramSocketCommunication extends Communication {
                         break;
                     case ACK_ACK_OPEN_CONNECTION:
                         //make it public
-                        isConnected = true;
+                        connect();
                         makePublic();
                         break;
                     case TIMEOUT_WARNING:
