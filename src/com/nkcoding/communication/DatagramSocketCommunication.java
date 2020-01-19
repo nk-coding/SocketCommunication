@@ -283,12 +283,23 @@ public class DatagramSocketCommunication extends Communication {
      * DOES NOT MODIFY source
      */
     private void handleMsg(byte[] msg, DatagramPacket source) {
+        if (readShort(msg, 0) != PROTOCOL_ID) {
+            System.err.println("received illegal package");
+            return;
+        }
         if (Math.random() < 0.5) {
+//            if (msg.length >= HEADER_SIZE + 2) {
+//                short id = readShort(msg, HEADER_SIZE);
+//                if (id != TIMEOUT_WARNING && id != ACK_TIMEOUT_WARNING) {
+//                    System.out.println("drop:");
+//                    printMsg(msg);
+//                }
+//            }
             return;
         }
         if (msg.length >= HEADER_SIZE + 2) {
             short id = readShort(msg, HEADER_SIZE);
-            if (id != TIMEOUT_WARNING && id != ACK_TIMEOUT_WARNING) {
+            if (readInt(msg, 17) != 0) {
                 System.out.println("ackField: " + readInt(msg, 17));
             }
         }
@@ -332,7 +343,8 @@ public class DatagramSocketCommunication extends Communication {
             } else {
                 System.out.println("start from client");
                 Connection connection = new Connection(socketAddress, readShort(msg, HEADER_SIZE + 2));
-                connection.startAndAcknowledge(false); //TODO ask for id
+                connection.startAndAcknowledge(false);
+                // does not have to ask for remoteID because it's already transmitted
             }
         } else {
             short remoteID = readShort(msg, 3);
@@ -400,16 +412,12 @@ public class DatagramSocketCommunication extends Communication {
                 + (msg[offset + 1] & 0xFF));
     }
 
-    static void setFlag(byte[] msg, int offset, byte flag, boolean value) {
-        if (value) {
-            msg[offset] |= flag;
-        } else {
-            msg[offset] &= ~flag;
-        }
-    }
-
     static void setFlag(byte[] msg, byte flag, boolean value) {
-        setFlag(msg, 2, flag, value);
+        if (value) {
+            msg[2] |= flag;
+        } else {
+            msg[2] &= ~flag;
+        }
     }
 
     static boolean readFlag(byte[] msg, byte flag) {
@@ -701,6 +709,9 @@ public class DatagramSocketCommunication extends Communication {
                 writeInt(msg, 9, sequence);
                 writeInt(msg, 13, ack);
                 writeInt(msg, 17, ackField);
+                if (ackField != 0) {
+                    System.out.println("different ackField to send: " + ackField);
+                }
                 if (readFlag(msg, IS_RELIABLE)) {
                     sequence++;
                     sentMessagesBuffer.addLast(msg);
@@ -818,6 +829,7 @@ public class DatagramSocketCommunication extends Communication {
             //check if it has to be handled by updateAcknowledged
             if ((msgSequence - messageBufferOffset) < 32) {
                 ackField |= (1 << (msgSequence - messageBufferOffset));
+                //System.out.println("ack field at this time: " + ackField);
                 tryReceiveReliableMessage();
             }
         }
@@ -878,7 +890,7 @@ public class DatagramSocketCommunication extends Communication {
                     } else {
                         byte[] msg = new byte[HEADER_SIZE + totalSize - amount * HEADER_SIZE];
                         int newPos = HEADER_SIZE;
-                        System.arraycopy(reliableMessageBuffer.peekFirst(), 0, msg, 0, HEADER_SIZE);
+                        System.arraycopy(reliableMessageBuffer.getFirst(), 0, msg, 0, HEADER_SIZE);
                         for (int i = 0; i < amount; i++) {
                             byte[] part = reliableMessageBuffer.removeFirst();
                             int length = part.length - HEADER_SIZE;
@@ -1005,7 +1017,7 @@ public class DatagramSocketCommunication extends Communication {
          */
         private synchronized void resend() {
             if (!isIndirect) {
-                if (System.currentTimeMillis() - lastResendTimestamp > RESEND_TIMEOUT && !isIndirect) {
+                if (System.currentTimeMillis() - lastResendTimestamp > RESEND_TIMEOUT) {
                     if (doDebug) System.out.println("RESEND");
                     int index = 0;
                     Iterator<byte[]> iter = sentMessagesBuffer.iterator();
@@ -1021,7 +1033,6 @@ public class DatagramSocketCommunication extends Communication {
             } else {
                 lastResendTimestamp = System.currentTimeMillis();
             }
-
         }
 
         @Override
@@ -1152,7 +1163,7 @@ public class DatagramSocketCommunication extends Communication {
                         }
                         break;
                     default:
-                        if (doDebug) System.out.println("unrecognized system msg: " + msgID);
+                        System.out.println("unrecognized system msg: " + msgID);
                         throw new IllegalStateException();
                 }
             } catch (IOException e) {
