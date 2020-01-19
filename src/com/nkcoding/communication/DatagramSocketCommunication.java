@@ -814,8 +814,8 @@ public class DatagramSocketCommunication extends Communication {
                 return;
             }
             //ensure the capacity
-            if (msgSequence - messageBufferOffset >= reliableMessageBuffer.size()) {
-                for (int i = reliableMessageBuffer.size(); i <= msgSequence + messageBufferOffset + 1; i++) {
+            if (msgSequence - messageBufferOffset + 5 >= reliableMessageBuffer.size()) {
+                for (int i = reliableMessageBuffer.size(); i <= msgSequence + messageBufferOffset + 5; i++) {
                     reliableMessageBuffer.addLast(null);
                 }
             }
