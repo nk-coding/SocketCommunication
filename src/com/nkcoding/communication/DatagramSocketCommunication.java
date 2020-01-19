@@ -17,7 +17,7 @@ public class DatagramSocketCommunication extends Communication {
     private static final int RESEND_TIMEOUT = 100;
     private static final short PROTOCOL_ID = 8001;
     private static final int HEADER_SIZE = 21;
-    private static final int MAX_SIZE = 29;
+    private static final int MAX_SIZE = 29;//Communication.MAX_SIZE + 25;
     /**
      * requests to open a connection
      * 0 arguments (right now)
@@ -362,7 +362,11 @@ public class DatagramSocketCommunication extends Communication {
      */
     private void handleMsg(byte[] msg, DatagramPacket source) {
         //region debugging
-        if (Math.random() < 0.5) {
+//        if (Math.random() < 0.5) {
+//            return;
+//        }
+        if (!isServer && readFlag(msg, IS_OPEN_CONNECTION) && !readFlag(msg, IS_INDIRECT) && source.getPort() == 8000) {
+            System.out.println("drop initial message from other client");
             return;
         }
         //endregion
@@ -375,14 +379,21 @@ public class DatagramSocketCommunication extends Communication {
         if (readFlag(msg, IS_OPEN_CONNECTION)) {
             connectTo(msg, source);
         } else {
-            short remoteID = readShort(msg, 3);
-            Connection connection = connections.get(remoteID);
-            if (connection != null) {
-                connection.receive(msg);
-            } else {
-                System.out.println("CANNOT RECEIVE MSG");
-                printMsg(msg);
-            }
+            deliverMsg(msg);
+        }
+    }
+
+    /**
+     * sens a message to its related connection
+     */
+    private void deliverMsg(byte[] msg) {
+        short remoteID = readShort(msg, 3);
+        Connection connection = connections.get(remoteID);
+        if (connection != null) {
+            connection.receive(msg);
+        } else {
+            System.out.println("CANNOT RECEIVE MSG");
+            printMsg(msg);
         }
     }
 
@@ -397,20 +408,31 @@ public class DatagramSocketCommunication extends Communication {
 
         Connection connection;
         if (isServer) {
-            idCounter++;
-            connection = new Connection(socketAddress, idCounter);
-            //send with the additional init message
-            System.out.println("start from server");
+            if (readFlag(msg, IS_INDIRECT)) {
+                deliverMsg(msg);
+            } else {
+                idCounter++;
+                connection = new Connection(socketAddress, idCounter);
+                //send with the additional init message
+                System.out.println("start from server");
+                connection.startAndAcknowledge(false);
+                connection.receive(msg);
+            }
         } else {
-            System.out.println("start from client");
-            connection = new Connection(socketAddress, readShort(msg, HEADER_SIZE + 2));
+            if (readFlag(msg, IS_INDIRECT)) {
+                deliverMsg(msg);
+            } else {
+                System.out.println("start from client");
+                connection = new Connection(socketAddress, readShort(msg, HEADER_SIZE + 2));
+                connection.startAndAcknowledge(readFlag(msg, IS_INDIRECT));
+                connection.receive(msg);
+            }
+
         }
-        connection.startAndAcknowledge(false);
         //receive the msg because this is now necessary because it is reliable
-        connection.receive(msg);
     }
 
-    private byte[] getPeerData(int own) {
+    private byte[] getPeerData(int withoutPeer) {
         try {
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             DataOutputStream dataOutputStream = new DataOutputStream(outputStream);
@@ -418,7 +440,7 @@ public class DatagramSocketCommunication extends Communication {
             short connectionCount = 0;
             for (Short remoteID : peerSet) {
                 Connection connectTo = connections.get(remoteID);
-                if (connectTo.remoteID != own && connectTo.isConnected) {
+                if (connectTo.remoteID != withoutPeer && connectTo.isConnected) {
                     connectionCount++;
                     dataOutputStream.writeShort(connectTo.getRemoteID());
                     byte[] address = connectTo.socketAdress.getAddress().getAddress();
@@ -481,6 +503,7 @@ public class DatagramSocketCommunication extends Communication {
     }
 
     private class Connection extends Thread implements Closeable {
+        private static final int TIMEOUT_RETRIES = 10;
         private short remoteID = -1;
 
         private InetSocketAddress socketAdress;
@@ -694,11 +717,10 @@ public class DatagramSocketCommunication extends Communication {
          * receive a message
          */
         public void receive(byte[] msg) {
-            if (doDebug) System.out.println("receive");
             try {
                 this.receiveQueue.put(msg);
             } catch (InterruptedException e) {
-                if (doDebug) System.out.println("unable to put message");
+                System.out.println("unable to put message");
                 e.printStackTrace();
             }
         }
@@ -749,12 +771,12 @@ public class DatagramSocketCommunication extends Communication {
                 } else {
                     sequenceAckField = 0;
                 }
-                //System.out.println("acknowledged: " + acknowledged + " sequenceAck: " + sequenceAck);
+
                 for (int i = 0; i < newSequenceAck - sequenceAck; i++) {
                     //these messages are proven sent, so remove these
                     sentMessagesBuffer.removeFirst();
                 }
-                sequenceAckField = readInt(msg, 17);
+                sequenceAckField |= readInt(msg, 17);
                 sequenceAck = newSequenceAck;
                 //find the newest acknowledged and resend all older
                 for (int i = 31; i > 0; i--) {
@@ -800,7 +822,7 @@ public class DatagramSocketCommunication extends Communication {
             reliableMessageBuffer.set(msgSequence - messageBufferOffset, msg);
             //check if it has to be handled by updateAcknowledged
             //these values have two different meanings
-            //DONT DO THIS EVER AGAIN NIKLAS
+            //DON'T DO THIS EVER AGAIN NIKLAS
             if ((msgSequence - ack) < 32) {
                 ackField |= (1 << (msgSequence - ack));
                 tryReceiveReliableMessage();
@@ -900,11 +922,13 @@ public class DatagramSocketCommunication extends Communication {
                     Connection indirectConnection = connections.get(readShort(msg, 5));
                     if (indirectConnection != null) {
                         indirectConnection.receive(msg);
-                    } else {
-                        System.out.println("could not transmit to correct indirect connection, create new connection");
+                    } else if (readFlag(msg, IS_OPEN_CONNECTION)) {
+                        System.out.println("CANNOT FIND CORRECT CONNECTION FOR MESSAGE");
                         Connection newIndirectConnection = new Connection(null, readShort(msg, 5));
                         System.out.println("created connection with remoteID " + newIndirectConnection.remoteID);
                         newIndirectConnection.startAndAcknowledge(true);
+                    } else {
+                        System.out.println("CANNOT HANDLE INDIRECT MESSAGE");
                     }
                 }
             } else {
@@ -938,13 +962,19 @@ public class DatagramSocketCommunication extends Communication {
         private void timeout() {
             if (doDebug) System.out.println("TIMEOUT WARNING");
             timeoutCounter++;
-            if (timeoutCounter > 20) {
+            if (timeoutCounter > TIMEOUT_RETRIES) {
                 if (isIndirect) {
                     System.out.println("too many timeouts even if indirect, shutdown: " + remoteID);
                     removeConnection(remoteID);
                 } else {
                     //set to indirect as a last try
                     timeoutCounter = 0;
+                    if (!isConnected && initialMsg != null && clientID != 0 && remoteID != 0) {
+                        System.out.println("unconnected timeout, send initialMsg");
+                        //make indirect because this is necessary for the send to function correctly
+                        isIndirect = true;
+                        sendInitialMessage(initialMsg);
+                    }
                     activateIndirect(true);
                 }
             }
@@ -1021,8 +1051,6 @@ public class DatagramSocketCommunication extends Communication {
                 try {
                     byte[] msg = receiveQueue.poll(RECEIVE_TIMEOUT, TimeUnit.MILLISECONDS);
                     if (msg == null) {
-                        if (doDebug) System.out.println("did not receive anything: " + remoteID);
-                        if (doDebug) System.out.println("resend from timeout");
                         timeout();
                     } else {
                         receiveInternal(msg);
