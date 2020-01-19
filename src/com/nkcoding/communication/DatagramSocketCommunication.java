@@ -597,52 +597,6 @@ public class DatagramSocketCommunication extends Communication {
             }
         }
 
-
-//        /**
-//         * start the connecting process
-//         */
-//        private void connect() {
-//            Thread connectThread = new Thread() {
-//                @Override
-//                public void run() {
-//                    super.run();
-//                    for (int i = 0; i < 10; i++) {
-//                        //if (clientID == 2 && remoteID == 1) break;
-//                        if (!connected) {
-//                            System.out.println("connect");
-//                            connectInternal();
-//                        }
-//                        try {
-//                            Thread.sleep(1000);
-//                        } catch (InterruptedException e) {
-//                            e.printStackTrace();
-//                        }
-//                    }
-//                    //set to indirect if it was not possible to connect
-//                    if (!connected) {
-//                        if (remoteID == 0) {
-//                            System.out.println("failed to connect to server");
-//                            removeConnection(remoteID);
-//                        } else {
-//                            System.out.println("failed to connect, set to indirect");
-//                            activateIndirect(true);
-//                        }
-//                    }
-//                }
-//            };
-//            connectThread.start();
-//        }
-
-//        /**
-//         * called internally
-//         */
-//        private void connectInternal() {
-//            if (!connected) {
-//
-//                sendInternal(msg);
-//            }
-//        }
-
         /**
          * handles all partial stuff, rest is done by sendInternal
          *
