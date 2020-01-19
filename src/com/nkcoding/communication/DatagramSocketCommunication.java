@@ -50,15 +50,15 @@ public class DatagramSocketCommunication extends Communication {
      */
     private static final short SET_INDIRECT = 4;
     /**
-     * sets the peers
-     * short amount
-     * (short id, short addressLength, byte[addressLength] address, int port)[length]
-     */
-    /**
      * requests a list of peers to connect to
      * 0 arguments
      */
     private static final short REQUEST_PEERS = 11;
+    /**
+     * sets the peers
+     * short amount
+     * (short id, short addressLength, byte[addressLength] address, int port)[length]
+     */
     private static final short ADD_PEERS = 7;
     /**
      * sends all (possibly) unsent messages via redirection
