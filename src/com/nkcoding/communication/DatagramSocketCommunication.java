@@ -365,10 +365,10 @@ public class DatagramSocketCommunication extends Communication {
 //        if (Math.random() < 0.5) {
 //            return;
 //        }
-        if (!isServer && readFlag(msg, IS_OPEN_CONNECTION) && !readFlag(msg, IS_INDIRECT) && source.getPort() == 8000) {
-            System.out.println("drop initial message from other client");
-            return;
-        }
+//        if (!isServer && readFlag(msg, IS_OPEN_CONNECTION) && !readFlag(msg, IS_INDIRECT) && source.getPort() == 8000) {
+//            System.out.println("drop initial message from other client");
+//            //return;
+//        }
         //endregion
 
         if (readShort(msg, 0) != PROTOCOL_ID) {
@@ -423,9 +423,16 @@ public class DatagramSocketCommunication extends Communication {
                 deliverMsg(msg);
             } else {
                 System.out.println("start from client");
-                connection = new Connection(socketAddress, readShort(msg, HEADER_SIZE + 2));
-                connection.startAndAcknowledge(readFlag(msg, IS_INDIRECT));
-                connection.receive(msg);
+                System.out.println("id: " + readShort(msg, HEADER_SIZE + 2));
+                short remoteID = readShort(msg, HEADER_SIZE + 2);
+                if (!connections.containsKey(remoteID)) {
+                    connection = new Connection(socketAddress, readShort(msg, HEADER_SIZE + 2));
+                    System.out.println("is indirect: " + readFlag(msg, IS_INDIRECT));
+                    connection.startAndAcknowledge(readFlag(msg, IS_INDIRECT));
+                    connection.receive(msg);
+                } else {
+                    System.out.println("decline connection: already established");
+                }
             }
 
         }
@@ -962,7 +969,6 @@ public class DatagramSocketCommunication extends Communication {
          * else it shuts down
          */
         private void timeout() {
-            if (doDebug) System.out.println("TIMEOUT WARNING");
             timeoutCounter++;
             if (timeoutCounter > TIMEOUT_RETRIES) {
                 if (isIndirect) {
@@ -977,6 +983,7 @@ public class DatagramSocketCommunication extends Communication {
                         isIndirect = true;
                         sendInitialMessage(initialMsg);
                     }
+                    System.out.println("activate indirect form timeout");
                     activateIndirect(true);
                 }
             }
@@ -1120,6 +1127,7 @@ public class DatagramSocketCommunication extends Communication {
                         System.out.println("received open message, ignore");
                         break;
                     case ACK_OPEN_CONNECTION:
+                        System.out.println("ack open connection");
                         short newClientID = inputStream.readShort();
                         connect();
                         if (newClientID != -1) {
@@ -1158,6 +1166,7 @@ public class DatagramSocketCommunication extends Communication {
                     case SET_INDIRECT:
                         System.out.println("SET INDIRECT");
                         //this also sends the msg
+                        System.out.println("activate indirect from system message");
                         activateIndirect(false);
                         break;
                     case REQUEST_PEERS:
